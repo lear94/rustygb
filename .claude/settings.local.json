@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(dpkg -l libasound2-dev)",
+      "Bash(rustup target *)",
+      "Bash(sudo -n apt-get install -y pkg-config libasound2-dev)"
+    ]
+  }
+}

@@ -45,8 +45,55 @@ This project is a **clean-room implementation** created solely for **educational
 ### Prerequisites
 You need to have **Rust** installed. If you don't have it, get it at [rustup.rs](https://rustup.rs/).
 
-### Building from Source
+On Linux you also need ALSA development headers for the audio backend:
+
 ```bash
-git clone [https://github.com/lear94/rustygb.git](https://github.com/lear94/rustygb.git)
+sudo apt install pkg-config libasound2-dev
+```
+
+### Building the native binary
+```bash
+git clone https://github.com/lear94/rustygb.git
 cd rustygb
 cargo build --release
+./target/release/rusty_gb path/to/game.gb
+```
+
+You can also drag-and-drop a `.gb` file onto the running window.
+
+### Building the WebAssembly version
+
+The same Rust core is also exposed as a `wasm-bindgen` module so the
+emulator runs in any modern browser. Install
+[`wasm-pack`](https://rustwasm.github.io/wasm-pack/) and build with:
+
+```bash
+wasm-pack build --release --target web --out-dir pkg
+```
+
+Then serve the repository root with any static HTTP server and open
+`/web/` in the browser:
+
+```bash
+python3 -m http.server 8000
+# → http://localhost:8000/web/
+```
+
+See [`web/README.md`](web/README.md) for the full WebAssembly workflow.
+
+## Project layout
+
+```
+src/
+├── lib.rs        High-level GameBoy wrapper + module re-exports
+├── main.rs       Native (winit + pixels + cpal) front-end
+├── wasm.rs       wasm-bindgen JS bindings (compiled only on wasm32)
+├── cpu.rs        Sharp SM83 CPU
+├── bus.rs        System bus / motherboard
+├── ppu.rs        Pixel Processing Unit
+├── apu.rs        Audio Processing Unit
+├── cartridge.rs  ROM-only / MBC1 / MBC3 / MBC5 mappers
+├── joypad.rs     Backend-agnostic joypad
+└── timer.rs      DIV/TIMA/TMA/TAC
+web/              Browser front-end for the WebAssembly build
+```

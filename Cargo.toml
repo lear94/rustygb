@@ -2,11 +2,41 @@
 name = "rusty_gb"
 version = "1.0.0"
 edition = "2021"
+description = "Cycle-accurate Game Boy (DMG) emulator written from scratch in Rust"
+license = "MIT"
+repository = "https://github.com/lear94/rustygb"
+
+[lib]
+name = "rusty_gb"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rusty_gb"
+path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0"
+
+# Native (desktop) front-end dependencies.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pixels = "0.13.0"
 winit = "0.28.7"
-winit_input_helper = "0.14.0" # VERSIÓN CRÍTICA: 0.15+ rompe compatibilidad
+winit_input_helper = "0.14.0"
 cpal = "0.15.2"
 crossbeam-channel = "0.5.8"
-anyhow = "1.0"
+
+# WebAssembly front-end dependencies.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = ["console"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

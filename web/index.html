@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>RustyGB - WebAssembly</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        body {
+            background: #1a1a1a;
+            color: #f0f0f0;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.5rem;
+        }
+
+        h1 {
+            margin: 0;
+            font-weight: 600;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            background: #000;
+            border: 2px solid #333;
+            width: 480px;
+            height: 432px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button,
+        label.file {
+            padding: 0.5rem 1rem;
+            background: #2a2a2a;
+            color: #f0f0f0;
+            border: 1px solid #444;
+            border-radius: 6px;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        button:hover,
+        label.file:hover {
+            background: #383838;
+        }
+
+        input[type=file] {
+            display: none;
+        }
+
+        .help {
+            font-size: 0.85rem;
+            color: #aaa;
+            max-width: 32rem;
+            text-align: center;
+        }
+
+        .status {
+            font-size: 0.85rem;
+            color: #6c6;
+            min-height: 1.2em;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>RustyGB <span style="font-size:1rem;color:#888">WebAssembly</span></h1>
+
+    <div class="controls">
+        <label class="file">
+            Load ROM
+            <input id="rom-input" type="file" accept=".gb,.gbc,.bin" />
+        </label>
+        <button id="reset-btn" disabled>Reset</button>
+        <button id="pause-btn" disabled>Pause</button>
+    </div>
+
+    <canvas id="screen" width="160" height="144"></canvas>
+
+    <div class="status" id="status">Drop a ROM or click "Load ROM" to start.</div>
+
+    <div class="help">
+        <strong>Controls:</strong> Z = A, X = B, Enter = Start, Space = Select, Arrow keys = D-Pad.
+        Click the canvas first if the keyboard is not responding.
+    </div>
+
+    <script type="module" src="./main.js"></script>
+</body>
+
+</html>
