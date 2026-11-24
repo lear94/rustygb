@@ -1,6 +1,6 @@
 // RustyGB WebAssembly front-end.
 //
-// Loads the wasm-pack output from ./pkg, wires keyboard input to the
+// Loads the wasm-pack output from ../pkg, wires keyboard input to the
 // emulator, draws each frame onto a 160x144 canvas and plays APU samples
 // through a ScriptProcessorNode.
 
@@ -21,6 +21,8 @@ const romInput = document.getElementById("rom-input");
 
 let gb = null;
 let lastRom = null;
+let lastName = "";
+let loadSequence = 0;
 let running = false;
 let frameRequest = null;
 let lastTickMs = 0;
@@ -28,6 +30,8 @@ let pendingMs = 0;
 let audioCtx = null;
 let audioNode = null;
 const SAMPLE_RATE = 48000;
+const MAX_LATENCY_SAMPLES = 4800;
+const AUTOSAVE_INTERVAL_MS = 5000;
 
 const KEY_MAP = {
     "KeyZ": WasmButton.A,
@@ -50,35 +54,76 @@ function blankScreen() {
 }
 
 function ensureAudio() {
-    if (audioCtx) {
-        return;
+    if (!audioCtx) {
+        const context = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: SAMPLE_RATE,
+        });
+        // A worklet cannot reach the emulator, which lives on this thread.
+        const bufferSize = 1024;
+        const node = context.createScriptProcessor(bufferSize, 0, 1);
+        node.onaudioprocess = (event) => playSamples(event.outputBuffer.getChannelData(0));
+        node.connect(context.destination);
+        audioCtx = context;
+        audioNode = node;
     }
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: SAMPLE_RATE,
-    });
-    // A worklet cannot reach the emulator, which lives on this thread.
-    const bufferSize = 1024;
-    audioNode = audioCtx.createScriptProcessor(bufferSize, 0, 1);
-    audioNode.onaudioprocess = (event) => {
-        const out = event.outputBuffer.getChannelData(0);
-        if (!gb) {
-            out.fill(0);
-            return;
-        }
-        const samples = gb.drain_audio(bufferSize);
-        const n = samples.length;
-        for (let i = 0; i < n; i++) {
-            out[i] = samples[i];
-        }
-        for (let i = n; i < bufferSize; i++) {
-            out[i] = 0;
-        }
-    };
-    audioNode.connect(audioCtx.destination);
     if (audioCtx.state === "suspended") {
         // Pends until the browser allows audio; the game must not wait for it.
-        audioCtx.resume().catch((e) => setStatus(`Audio unavailable: ${e}`));
+        audioCtx.resume().catch(() => {});
     }
+}
+
+// The game runs without audio when the browser refuses it.
+function tryAudio() {
+    try {
+        ensureAudio();
+    } catch (e) {
+        console.warn("Audio unavailable:", e);
+    }
+}
+
+function playSamples(out) {
+    out.fill(0);
+    if (!gb || !running) {
+        return;
+    }
+    // Samples queued while audio was suspended would become permanent latency.
+    const excess = gb.buffered_audio() - MAX_LATENCY_SAMPLES;
+    if (excess > 0) {
+        gb.drain_audio(excess);
+    }
+    out.set(gb.drain_audio(out.length));
+}
+
+// Title, cartridge type and checksums: enough to tell games apart.
+function saveKey(rom) {
+    const header = Array.from(rom.subarray(0x134, 0x150));
+    return "rustygb:" + header.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function loadSave(rom) {
+    const text = localStorage.getItem(saveKey(rom));
+    return text === null ? undefined : Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
+// Returns whether no progress is pending.
+function persist() {
+    if (!gb || !gb.needs_save()) {
+        return true;
+    }
+    const image = gb.save_image(unixNow());
+    try {
+        const text = Array.from(image, (b) => String.fromCharCode(b)).join("");
+        localStorage.setItem(saveKey(lastRom), btoa(text));
+    } catch (e) {
+        setStatus(`SAVE FAILED: ${e}`);
+        return false;
+    }
+    gb.mark_saved();
+    return true;
+}
+
+function unixNow() {
+    return Math.floor(Date.now() / 1000);
 }
 
 function renderFrame() {
@@ -123,12 +168,16 @@ function stopLoop() {
 }
 
 function loadRom(bytes, name) {
-    ensureAudio();
+    tryAudio();
+    if (!persist() && !confirm("Saving failed. Lose the current progress?")) {
+        return;
+    }
     // Build first: a rejected ROM must leave the running game usable.
-    const next = new WasmGameBoy(bytes, SAMPLE_RATE);
+    const next = new WasmGameBoy(bytes, loadSave(bytes), SAMPLE_RATE, unixNow());
     gb?.free();
     gb = next;
     lastRom = bytes;
+    lastName = name;
     running = true;
     resetBtn.disabled = false;
     pauseBtn.disabled = false;
@@ -149,24 +198,35 @@ async function tryLoadFile(file) {
     if (!file) {
         return;
     }
+    loadSequence += 1;
+    const sequence = loadSequence;
     try {
-        tryLoadRom(new Uint8Array(await file.arrayBuffer()), file.name);
+        const [buffer] = await Promise.all([file.arrayBuffer(), ready]);
+        // A later request wins even if its file is read first.
+        if (sequence === loadSequence) {
+            tryLoadRom(new Uint8Array(buffer), file.name);
+        }
     } catch (e) {
         setStatus(`Failed to read ROM: ${e}`);
     }
 }
 
-romInput.addEventListener("change", (event) => tryLoadFile(event.target.files?.[0]));
+romInput.addEventListener("change", () => {
+    tryLoadFile(romInput.files?.[0]);
+    // Otherwise choosing the same file again fires no event.
+    romInput.value = "";
+});
 
-canvas.addEventListener("dragover", (event) => event.preventDefault());
-canvas.addEventListener("drop", (event) => {
+// On the whole window: a missed drop would navigate away from the game.
+window.addEventListener("dragover", (event) => event.preventDefault());
+window.addEventListener("drop", (event) => {
     event.preventDefault();
     tryLoadFile(event.dataTransfer?.files?.[0]);
 });
 
 resetBtn.addEventListener("click", () => {
     if (lastRom) {
-        tryLoadRom(lastRom, "(reset)");
+        tryLoadRom(lastRom, lastName);
     }
 });
 
@@ -183,29 +243,45 @@ pauseBtn.addEventListener("click", () => {
     }
 });
 
+function setKey(event, pressed) {
+    const btn = KEY_MAP[event.code];
+    if (btn === undefined || !gb) {
+        return;
+    }
+    if (pressed && (event.ctrlKey || event.metaKey || event.altKey)) {
+        return;
+    }
+    event.preventDefault();
+    gb.set_button(btn, pressed);
+}
+
+function releaseAllKeys() {
+    if (gb) {
+        Object.values(KEY_MAP).forEach((btn) => gb.set_button(btn, false));
+    }
+}
+
 window.addEventListener("keydown", (event) => {
-    const btn = KEY_MAP[event.code];
-    if (btn === undefined || !gb) {
-        return;
+    if (gb) {
+        tryAudio();
     }
-    event.preventDefault();
-    gb.set_button(btn, true);
+    setKey(event, true);
 });
-
-window.addEventListener("keyup", (event) => {
-    const btn = KEY_MAP[event.code];
-    if (btn === undefined || !gb) {
-        return;
+window.addEventListener("keyup", (event) => setKey(event, false));
+window.addEventListener("pointerdown", () => {
+    if (gb) {
+        tryAudio();
     }
-    event.preventDefault();
-    gb.set_button(btn, false);
 });
-
-(async function bootstrap() {
-    try {
-        await init();
-        blankScreen();
-    } catch (e) {
-        setStatus(`Failed to initialise WebAssembly module: ${e}`);
+window.addEventListener("blur", releaseAllKeys);
+window.addEventListener("pagehide", persist);
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        releaseAllKeys();
+        persist();
     }
-})();
+});
+setInterval(persist, AUTOSAVE_INTERVAL_MS);
+
+const ready = init();
+ready.then(blankScreen, (e) => setStatus(`Failed to initialise WebAssembly module: ${e}`));

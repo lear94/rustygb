@@ -34,11 +34,12 @@ Known limits: mid-line register changes, variable mode 3 length, VRAM/OAM blocki
 by the PPU, T-cycle wave RAM access, the DMG OAM bug and DMA bus conflicts are not modelled.
 
 ### Cartridge Support
-* **ROM Only:** 32KB games.
-* **MBC1:** Bank switching logic.
-* **MBC3:** Bank switching (no real-time clock).
-* **MBC5:** Modern Game Boy games support.
-* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on exit, on ROM change and every ~10 s. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
+* **ROM Only:** 32KB games, with or without RAM.
+* **MBC1:** Bank switching, including multicarts.
+* **MBC2:** Bank switching with built-in RAM.
+* **MBC3 / MBC30:** Bank switching and real-time clock.
+* **MBC5:** Bank switching; the rumble motor is ignored.
+* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on exit, on ROM change and every ~10 s (the web build uses `localStorage`). If saving fails, closing or loading another ROM asks to be repeated before losing progress. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
 
 ---
 
@@ -60,6 +61,8 @@ cd rustygb
 cargo build --release
 ./target/release/rusty_gb path/to/game.gb
 ```
+
+Keys: `Z` = A, `X` = B, `Space` = Select, `Enter` = Start, arrows = D-Pad, `Esc` quits.
 
 You can also drag-and-drop a `.gb` file onto the running window.
 

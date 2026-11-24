@@ -6,7 +6,7 @@
 //! import init, { WasmGameBoy, WasmButton } from "./pkg/rusty_gb.js";
 //!
 //! await init();
-//! const gb = new WasmGameBoy(romBytes, 48000);
+//! const gb = new WasmGameBoy(romBytes, undefined, 48000, Math.floor(Date.now() / 1000));
 //! gb.set_button(WasmButton.Start, true);
 //! gb.run_frame();
 //! ctx.putImageData(new ImageData(new Uint8ClampedArray(gb.frame()), 160, 144), 0, 0);
@@ -76,15 +76,39 @@ pub struct WasmGameBoy {
 
 #[wasm_bindgen]
 impl WasmGameBoy {
-    /// Build a new emulator from a ROM byte array and an audio sample rate.
+    /// Build a new emulator from a ROM, an optional save image, the audio sample rate and
+    /// the Unix time.
     ///
     /// # Errors
-    /// The message of the [`rusty_gb::CartridgeError`] rejecting the ROM.
+    /// The message of the [`rusty_gb::CartridgeError`] rejecting the ROM or the save.
     #[wasm_bindgen(constructor)]
-    pub fn new(rom: Vec<u8>, sample_rate: u32) -> Result<WasmGameBoy, JsValue> {
-        GameBoy::from_rom(rom, sample_rate)
-            .map(|gb| WasmGameBoy { inner: gb })
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+    pub fn new(
+        rom: Vec<u8>,
+        save: Option<Vec<u8>>,
+        sample_rate: u32,
+        unix_now_s: u32,
+    ) -> Result<WasmGameBoy, JsValue> {
+        let mut inner = GameBoy::from_rom_with_save(rom, save, sample_rate)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        inner.cartridge().sync_clock(u64::from(unix_now_s));
+        Ok(Self { inner })
+    }
+
+    /// Whether battery-backed state changed since `mark_saved`.
+    #[must_use]
+    pub fn needs_save(&mut self) -> bool {
+        self.inner.cartridge().needs_save()
+    }
+
+    /// Record that the current save image reached storage.
+    pub fn mark_saved(&mut self) {
+        self.inner.cartridge().mark_saved();
+    }
+
+    /// Save image, or `undefined` without battery-backed state.
+    #[must_use]
+    pub fn save_image(&mut self, unix_now_s: u32) -> Option<Vec<u8>> {
+        self.inner.cartridge().save_image(u64::from(unix_now_s))
     }
 
     /// Run the CPU for one full DMG frame (~70 224 T-cycles).

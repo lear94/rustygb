@@ -45,9 +45,8 @@ Then open <http://localhost:8000/web/>, click **Load ROM**, and pick a
 
 ## Notes
 
-* Save files are not persisted across reloads (the WebAssembly build has no
-  filesystem access). Hooking the cartridge RAM up to IndexedDB or
-  `localStorage` is left as a small follow-up.
+* Battery saves are kept in `localStorage`, per game, every few seconds and when
+  the page closes. Clearing site data deletes them.
 * The current audio path uses `ScriptProcessorNode` for portability.
   Switching to an `AudioWorklet` would shave a few milliseconds of latency
   on modern browsers.
