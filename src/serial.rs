@@ -3,17 +3,16 @@
 const START: u8 = 0x80;
 const INTERNAL_CLOCK: u8 = 0x01;
 const UNUSED: u8 = 0x7E;
-/// 8 bits at 8192 Hz, in M-cycles.
-const TRANSFER_M_CYCLES: u16 = 1024;
-/// A disconnected line idles high, so every received bit is 1.
-const DISCONNECTED: u8 = 0xFF;
+const TRANSFER_BITS: u8 = 8;
+/// A disconnected line idles high.
+const DISCONNECTED_BIT: u8 = 1;
 
 /// Serial registers SB and SC.
 #[derive(Debug, Default)]
 pub struct Serial {
     data: u8,
     control: u8,
-    remaining: u16,
+    remaining_bits: u8,
 }
 
 impl Serial {
@@ -23,19 +22,19 @@ impl Serial {
         Self::default()
     }
 
-    /// Advances one M-cycle.
+    /// Shifts one bit; called at 8192 Hz, in phase with the divider.
     ///
     /// # Returns
     /// Whether the serial interrupt is requested.
-    pub fn tick(&mut self) -> bool {
-        if self.remaining == 0 {
+    pub fn clock(&mut self) -> bool {
+        if self.remaining_bits == 0 {
             return false;
         }
-        self.remaining -= 1;
-        if self.remaining != 0 {
+        self.remaining_bits -= 1;
+        self.data = (self.data << 1) | DISCONNECTED_BIT;
+        if self.remaining_bits != 0 {
             return false;
         }
-        self.data = DISCONNECTED;
         self.control &= !START;
         true
     }
@@ -60,8 +59,8 @@ impl Serial {
     /// Writes SC. A transfer on the external clock never completes: nobody drives it.
     pub fn write_control(&mut self, val: u8) {
         self.control = val & !UNUSED;
-        self.remaining = if val & START != 0 && val & INTERNAL_CLOCK != 0 {
-            TRANSFER_M_CYCLES
+        self.remaining_bits = if val & START != 0 && val & INTERNAL_CLOCK != 0 {
+            TRANSFER_BITS
         } else {
             0
         };
@@ -73,22 +72,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tick_internal_clock_receives_ones() {
+    fn clock_internal_clock_receives_ones() {
         let mut serial = Serial::new();
         serial.write_data(0x42);
         serial.write_control(0x81);
-        assert!((1..TRANSFER_M_CYCLES).all(|_| !serial.tick()));
-        assert_eq!((serial.data(), serial.control()), (0x42, 0xFF));
-        assert!(serial.tick());
+        assert!((1..TRANSFER_BITS).all(|_| !serial.clock()));
+        assert_eq!((serial.data(), serial.control()), (0x7F, 0xFF));
+        assert!(serial.clock());
         assert_eq!((serial.data(), serial.control()), (0xFF, 0x7F));
-        assert!(!serial.tick());
+        assert!(!serial.clock());
     }
 
     #[test]
-    fn tick_external_clock_never_completes() {
+    fn clock_external_clock_never_completes() {
         let mut serial = Serial::new();
         serial.write_control(0x80);
-        assert!((0..TRANSFER_M_CYCLES * 2).all(|_| !serial.tick()));
+        assert!((0..TRANSFER_BITS * 2).all(|_| !serial.clock()));
         assert_eq!(serial.control(), 0xFE);
     }
 }

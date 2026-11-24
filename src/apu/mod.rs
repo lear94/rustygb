@@ -18,8 +18,6 @@ use wave::Wave;
 const T_CYCLES_PER_TICK: u16 = 4;
 /// Calls to [`Apu::tick`] per emulated second.
 const TICK_RATE_HZ: u32 = 1_048_576;
-/// 512 Hz sequencer clocking lengths, sweep and envelopes.
-const SEQUENCER_PERIOD_TICKS: u16 = 2048;
 const SEQUENCER_STEP_MASK: u8 = 7;
 /// Largest 11-bit channel frequency.
 const MAX_FREQUENCY: u16 = 0x7FF;
@@ -30,6 +28,8 @@ const CHANNEL_GAIN: f32 = 0.25;
 /// Two sides with volumes 1-8 each.
 const MAX_SIDE_GAIN: f32 = 16.0;
 
+/// Value seen on the bus when nothing drives it.
+const OPEN_BUS: u8 = 0xFF;
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
 const WAVE_RAM_BASE: u16 = 0xFF30;
@@ -76,7 +76,6 @@ pub struct Apu {
     noise: Noise,
     registers: [u8; REGISTER_COUNT],
     powered: bool,
-    sequencer_ticks: u16,
     /// Next sequencer step.
     sequencer_step: u8,
     sample_rate_hz: u32,
@@ -99,7 +98,6 @@ impl Apu {
             noise: Noise::new(),
             registers: [0; REGISTER_COUNT],
             powered: true,
-            sequencer_ticks: 0,
             sequencer_step: 0,
             sample_rate_hz: sample_rate_hz.min(TICK_RATE_HZ),
             sample_phase: 0,
@@ -131,19 +129,39 @@ impl Apu {
     }
 
     /// Advances one M-cycle.
-    pub fn tick(&mut self) {
+    ///
+    /// # Arguments
+    /// * `sequencer_clock` - the divider clocks the 512 Hz sequencer.
+    pub fn tick(&mut self, sequencer_clock: bool) {
         if self.powered {
             self.square_1.tick();
             self.square_2.tick();
             self.wave.tick();
             self.noise.tick();
-            self.tick_sequencer();
+            if sequencer_clock {
+                self.clock_sequencer();
+            }
         }
+        if self.sample_due() {
+            let sample = self.mix();
+            self.emit(sample);
+        }
+    }
+
+    /// Lets one M-cycle pass with the system clock off: time flows, silently.
+    pub(crate) fn tick_stopped(&mut self) {
+        if self.sample_due() {
+            self.emit(0.0);
+        }
+    }
+
+    fn sample_due(&mut self) -> bool {
         self.sample_phase += self.sample_rate_hz;
         if self.sample_phase >= TICK_RATE_HZ {
             self.sample_phase -= TICK_RATE_HZ;
-            self.emit_sample();
+            return true;
         }
+        false
     }
 
     /// Reads an APU register or wave RAM; other addresses are open bus.
@@ -156,7 +174,7 @@ impl Apu {
                 let idx = offset(addr, REGISTER_BASE);
                 match (self.registers.get(idx), READ_MASKS.get(idx)) {
                     (Some(register), Some(mask)) => register | mask,
-                    _ => 0xFF,
+                    _ => OPEN_BUS,
                 }
             }
         }
@@ -237,7 +255,6 @@ impl Apu {
         }
         if !self.powered && powered {
             self.sequencer_step = 0;
-            self.sequencer_ticks = 0;
         }
         self.powered = powered;
     }
@@ -266,12 +283,7 @@ impl Apu {
         power | 0x70 | channels
     }
 
-    fn tick_sequencer(&mut self) {
-        self.sequencer_ticks += 1;
-        if self.sequencer_ticks < SEQUENCER_PERIOD_TICKS {
-            return;
-        }
-        self.sequencer_ticks = 0;
+    fn clock_sequencer(&mut self) {
         let step = self.sequencer_step;
         self.sequencer_step = (step + 1) & SEQUENCER_STEP_MASK;
         if step & 1 == 0 {
@@ -290,12 +302,12 @@ impl Apu {
         }
     }
 
-    fn emit_sample(&mut self) {
+    fn emit(&mut self, sample: f32) {
         if self.samples.len() >= MAX_BUFFERED_SAMPLES {
             self.samples.pop_front();
         }
         // Never reallocates: the capacity is reserved up front and just checked.
-        self.samples.push_back(self.mix());
+        self.samples.push_back(sample);
     }
 
     fn mix(&self) -> f32 {

@@ -1,7 +1,7 @@
 //! Video: mode timing, interrupts and registers of the scanline renderer.
 //!
-//! Each line is drawn at once when H-Blank starts, so mid-line register changes, the
-//! variable length of mode 3 and VRAM/OAM blocking are not modelled.
+//! Each line is drawn at once when H-Blank starts, so mid-line register changes are not
+//! modelled.
 
 mod render;
 #[cfg(test)]
@@ -17,9 +17,15 @@ const ROW_LEN: usize = SCREEN_WIDTH * PIXEL_LEN;
 
 const DOTS_PER_TICK: u16 = 4;
 const DOTS_PER_LINE: u16 = 456;
-/// Last dot sampled as mode 2, then as mode 3, on the M-cycle grid.
+/// The line that enables the LCD starts partway.
+const LCD_ON_FIRST_DOT: u16 = 4;
+/// Dot at which a line enters its first mode.
+const MODE_START_DOT: u16 = 4;
+/// Dot of the last line at which LYC sees line 0.
+const LAST_LINE_WRAP_DOT: u16 = 12;
+/// Last dot sampled as mode 2 and first as mode 0, on the M-cycle grid.
 const OAM_SCAN_LAST_DOT: u16 = 80;
-const DRAWING_LAST_DOT: u16 = 252;
+const DRAWING_END_DOT: u16 = 256;
 const FIRST_VBLANK_LINE: u8 = 144;
 const LAST_LINE: u8 = 153;
 
@@ -65,16 +71,30 @@ impl Mode {
 }
 
 /// Pixel processing unit.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent one-bit hardware latches"
+)]
 pub struct Ppu {
+    /// Last complete picture.
     frame: Vec<u8>,
+    /// Picture being drawn.
+    back: Vec<u8>,
+    /// The first picture after enabling the LCD is never shown.
+    skip_frame: bool,
     vram: [u8; VRAM_LEN],
     oam: [u8; OAM_LEN],
     lcdc: u8,
     stat_sources: u8,
     scy: u8,
     scx: u8,
+    /// Scanline, 0-153.
+    line: u8,
+    /// Scanline as reported, which restarts early.
     ly: u8,
     lyc: u8,
+    /// Scanline LYC is compared with.
+    compared_line: Option<u8>,
     /// Frozen while the LCD is off.
     coincidence: bool,
     wy: u8,
@@ -83,8 +103,12 @@ pub struct Ppu {
     obp0: u8,
     obp1: u8,
     dots: u16,
+    /// WY matched a line of this frame.
+    window_triggered: bool,
     /// Lines of the window drawn this frame.
     window_line: u8,
+    /// First dot of H-Blank on this line.
+    drawing_end_dot: u16,
     mode: Mode,
     /// The first line after enabling the LCD has no OAM scan and reports mode 0 instead.
     skip_oam_scan: bool,
@@ -99,14 +123,18 @@ impl Ppu {
     pub fn new() -> Self {
         Self {
             frame: vec![0; ROW_LEN * SCREEN_HEIGHT],
+            back: vec![0; ROW_LEN * SCREEN_HEIGHT],
+            skip_frame: false,
             vram: [0; VRAM_LEN],
             oam: [0; OAM_LEN],
             lcdc: 0x91,
             stat_sources: 0,
             scy: 0,
             scx: 0,
+            line: 0,
             ly: 0,
             lyc: 0,
+            compared_line: Some(0),
             coincidence: true,
             wy: 0,
             wx: 0,
@@ -114,7 +142,9 @@ impl Ppu {
             obp0: 0xFF,
             obp1: 0xFF,
             dots: 0,
+            window_triggered: false,
             window_line: 0,
+            drawing_end_dot: DRAWING_END_DOT,
             mode: Mode::OamScan,
             skip_oam_scan: false,
             stat_line: false,
@@ -140,9 +170,12 @@ impl Ppu {
             self.dots += DOTS_PER_TICK;
             if self.dots >= DOTS_PER_LINE {
                 self.start_line();
-            }
-            if self.ly < FIRST_VBLANK_LINE {
+            } else if self.dots == MODE_START_DOT {
+                self.start_mode();
+            } else if self.line < FIRST_VBLANK_LINE {
                 self.update_visible_mode();
+            } else if self.line == LAST_LINE && self.dots == LAST_LINE_WRAP_DOT {
+                self.compare_lyc(Some(self.ly));
             }
         }
         std::mem::take(&mut self.requested)
@@ -152,8 +185,8 @@ impl Ppu {
     #[must_use]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x8000..=0x9FFF => self.vram_byte(addr),
-            0xFE00..=0xFE9F => self
+            0x8000..=0x9FFF if self.vram_readable() => self.vram_byte(addr),
+            0xFE00..=0xFE9F if self.oam_readable() => self
                 .oam
                 .get(usize::from(addr - OAM_BASE))
                 .copied()
@@ -176,14 +209,19 @@ impl Ppu {
     /// Writes VRAM, OAM or a register; other addresses are ignored.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x8000..=0x9FFF => {
+            0x8000..=0x9FFF if self.vram_writable() => {
                 if let Some(cell) = self.vram.get_mut(usize::from(addr - VRAM_BASE)) {
                     *cell = val;
                 }
             }
-            0xFE00..=0xFE9F => self.write_oam(usize::from(addr - OAM_BASE), val),
+            0xFE00..=0xFE9F if self.oam_writable() => {
+                self.write_oam(usize::from(addr - OAM_BASE), val);
+            }
             0xFF40 => self.write_lcdc(val),
             0xFF41 => {
+                // DMG quirk: for an instant every source is enabled.
+                self.stat_sources = STAT_SOURCES;
+                self.update_stat_line();
                 self.stat_sources = val & STAT_SOURCES;
                 self.update_stat_line();
             }
@@ -191,7 +229,7 @@ impl Ppu {
             0xFF43 => self.scx = val,
             0xFF45 => {
                 self.lyc = val;
-                self.compare_lyc();
+                self.compare_lyc(self.compared_line);
             }
             0xFF47 => self.bgp = val,
             0xFF48 => self.obp0 = val,
@@ -207,6 +245,30 @@ impl Ppu {
         if let Some(cell) = self.oam.get_mut(idx) {
             *cell = val;
         }
+    }
+
+    fn vram_readable(&self) -> bool {
+        // Reads are cut off one M-cycle before writes.
+        self.mode != Mode::Drawing && !self.at_scan_end()
+    }
+
+    fn vram_writable(&self) -> bool {
+        self.mode != Mode::Drawing
+    }
+
+    fn oam_readable(&self) -> bool {
+        // The scan claims OAM while STAT still reports mode 0.
+        let scan_starting = self.dots == 0 && (1..FIRST_VBLANK_LINE).contains(&self.line);
+        matches!(self.mode, Mode::HBlank | Mode::VBlank) && !scan_starting
+    }
+
+    fn oam_writable(&self) -> bool {
+        // Between scan and drawing, writes get through for one M-cycle.
+        matches!(self.mode, Mode::HBlank | Mode::VBlank) || self.at_scan_end()
+    }
+
+    fn at_scan_end(&self) -> bool {
+        self.mode == Mode::OamScan && self.dots == OAM_SCAN_LAST_DOT
     }
 
     fn vram_byte(&self, addr: u16) -> u8 {
@@ -230,37 +292,78 @@ impl Ppu {
         let is_on = val & LCDC_ON != 0;
         self.lcdc = val;
         if was_on && !is_on {
-            self.ly = 0;
-            self.dots = 0;
-            self.window_line = 0;
-            self.mode = Mode::HBlank;
-            self.update_stat_line();
+            self.turn_off();
         }
         if !was_on && is_on {
             self.skip_oam_scan = true;
-            self.compare_lyc();
+            self.dots = LCD_ON_FIRST_DOT;
+            self.skip_frame = true;
+            self.compare_lyc(Some(self.ly));
         }
+    }
+
+    fn turn_off(&mut self) {
+        self.line = 0;
+        self.ly = 0;
+        self.dots = 0;
+        self.window_line = 0;
+        self.window_triggered = false;
+        self.mode = Mode::HBlank;
+        self.update_stat_line();
+        self.blank_frame();
     }
 
     fn start_line(&mut self) {
         self.dots = 0;
-        self.ly = if self.ly == LAST_LINE { 0 } else { self.ly + 1 };
-        if self.ly == FIRST_VBLANK_LINE {
-            self.window_line = 0;
-            self.requested |= IRQ_VBLANK;
-            self.mode = Mode::VBlank;
+        self.line = if self.line == LAST_LINE {
+            0
+        } else {
+            self.line + 1
+        };
+        self.ly = self.line;
+        if self.line != 0 {
+            self.compare_lyc(None);
         }
-        self.compare_lyc();
+    }
+
+    /// Enters the first mode of the line, one M-cycle after LY changes.
+    fn start_mode(&mut self) {
+        if self.line == FIRST_VBLANK_LINE {
+            self.enter_vblank();
+        } else if self.line < FIRST_VBLANK_LINE && !self.skip_oam_scan {
+            self.mode = Mode::OamScan;
+        }
+        // Mode and coincidence change together, so the STAT line sees a single edge.
+        self.compare_lyc(Some(self.line));
+        if self.line == LAST_LINE {
+            // LY stops showing the last line long before it ends.
+            self.ly = 0;
+        }
+    }
+
+    fn enter_vblank(&mut self) {
+        self.requested |= IRQ_VBLANK;
+        // The OAM source also fires on this line, although nothing is scanned.
+        self.mode = Mode::OamScan;
+        self.update_stat_line();
+        self.mode = Mode::VBlank;
+        self.window_line = 0;
+        self.window_triggered = false;
+        if std::mem::take(&mut self.skip_frame) {
+            return;
+        }
+        std::mem::swap(&mut self.frame, &mut self.back);
     }
 
     fn update_visible_mode(&mut self) {
-        let mode = if self.dots <= OAM_SCAN_LAST_DOT {
-            if self.skip_oam_scan {
-                return;
-            }
-            Mode::OamScan
-        } else if self.dots <= DRAWING_LAST_DOT {
+        if self.dots <= OAM_SCAN_LAST_DOT {
+            return;
+        }
+        let mode = if self.mode == Mode::OamScan || self.skip_oam_scan {
+            self.drawing_end_dot = DRAWING_END_DOT + self.drawing_penalty();
             Mode::Drawing
+        } else if self.dots < self.drawing_end_dot {
+            return;
         } else {
             Mode::HBlank
         };
@@ -275,15 +378,17 @@ impl Ppu {
         }
     }
 
-    fn compare_lyc(&mut self) {
+    /// Compares LYC with the scanline, or with nothing while the scanline changes.
+    fn compare_lyc(&mut self, line: Option<u8>) {
+        self.compared_line = line;
         if self.lcdc & LCDC_ON != 0 {
-            self.coincidence = self.ly == self.lyc;
+            self.coincidence = line == Some(self.lyc);
             self.update_stat_line();
         }
     }
 
     fn update_stat_line(&mut self) {
-        let mode_source = if self.lcdc & LCDC_ON != 0 {
+        let mode_source = if self.lcdc & LCDC_ON != 0 && !self.skip_oam_scan {
             self.mode.stat_source()
         } else {
             0

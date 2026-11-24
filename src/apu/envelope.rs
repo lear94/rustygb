@@ -24,8 +24,14 @@ impl Envelope {
         self.register & DAC_MASK != 0
     }
 
+    #[cfg(test)]
     pub(super) fn volume(&self) -> u8 {
         self.volume
+    }
+
+    /// Volume as a fraction of full scale.
+    pub(super) fn amplitude(&self) -> f32 {
+        f32::from(self.volume) / f32::from(MAX_VOLUME)
     }
 
     pub(super) fn trigger(&mut self) {

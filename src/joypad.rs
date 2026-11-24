@@ -46,9 +46,8 @@ pub struct Joypad {
     rows: [u8; 2],
     /// Mirror of the column-select bits last written by the CPU.
     column_select: u8,
-    /// Set when any button transitions from released to pressed.
-    /// Consumed (and cleared) by the bus during its next tick.
-    pub interrupt: bool,
+    /// A selected line went low since the last [`Self::take_interrupt`].
+    interrupt: bool,
 }
 
 impl Joypad {
@@ -62,12 +61,9 @@ impl Joypad {
         }
     }
 
-    /// Update the internal mask for a single button.
-    ///
-    /// When `pressed` is `true` the matching bit is cleared (active-low).
-    /// A new press (released → pressed transition) latches the joypad
-    /// interrupt request so the bus can forward it to the CPU.
+    /// Presses or releases a button.
     pub fn set_button(&mut self, button: Button, pressed: bool) {
+        let before = self.read();
         let [actions, directions] = &mut self.rows;
         let (row, mask) = match button {
             Button::A => (actions, 0x01),
@@ -79,15 +75,12 @@ impl Joypad {
             Button::Up => (directions, 0x04),
             Button::Down => (directions, 0x08),
         };
-        let was_released = *row & mask != 0;
         if pressed {
             *row &= !mask;
         } else {
             *row |= mask;
         }
-        if pressed && was_released {
-            self.interrupt = true;
-        }
+        self.detect_press(before);
     }
 
     /// Reads P1: unused bits are 1 and the column-select bits read back.
@@ -110,9 +103,21 @@ impl Joypad {
         self.read() & LINES_MASK != LINES_MASK
     }
 
-    /// CPU write to P1: only the two column-select bits are writable.
+    /// Writes P1; only the column-select bits are writable.
     pub fn write(&mut self, value: u8) {
+        let before = self.read();
         self.column_select = value & (SELECT_ACTIONS | SELECT_DIRECTIONS);
+        self.detect_press(before);
+    }
+
+    /// Returns and clears the interrupt request.
+    pub(crate) fn take_interrupt(&mut self) -> bool {
+        std::mem::take(&mut self.interrupt)
+    }
+
+    /// Any selected line going low interrupts, whether by a press or by selecting.
+    fn detect_press(&mut self, before: u8) {
+        self.interrupt |= before & !self.read() & LINES_MASK != 0;
     }
 }
 
@@ -168,7 +173,19 @@ mod tests {
         let mut joypad = Joypad::new();
         for (pressed, expected) in [(false, false), (true, true), (true, false), (false, false)] {
             joypad.set_button(Button::A, pressed);
-            assert_eq!(std::mem::take(&mut joypad.interrupt), expected);
+            assert_eq!(joypad.take_interrupt(), expected);
         }
+    }
+
+    #[test]
+    fn write_selecting_held_button_interrupts() {
+        let mut joypad = Joypad::new();
+        joypad.write(0x30);
+        joypad.set_button(Button::A, true);
+        assert!(!joypad.take_interrupt(), "row not selected");
+        joypad.write(0x20);
+        assert!(!joypad.take_interrupt(), "directions hold nothing");
+        joypad.write(0x10);
+        assert!(joypad.take_interrupt());
     }
 }

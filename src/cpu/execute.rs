@@ -4,11 +4,13 @@
 
 use super::alu::sign_extend;
 use super::registers::{R16, R8};
-use super::Cpu;
+use super::{Activity, Cpu, EnableDelay};
 use crate::bus::Motherboard;
 
 /// Base of the I/O and high-RAM page reached by LDH.
 const HIGH_PAGE: u8 = 0xFF;
+/// The encoding of LD (HL),(HL) is HALT instead.
+const HALT_OPCODE: u8 = 0x76;
 /// RST targets sit 8 bytes apart, so the masked opcode is the address.
 const RST_MASK: u8 = 0x38;
 
@@ -17,7 +19,7 @@ impl Cpu {
         let (y, z) = ((op >> 3) & 7, op & 7);
         match op >> 6 {
             0 => self.execute_block_0(y, z, bus),
-            1 if op == 0x76 => self.halt(bus),
+            1 if op == HALT_OPCODE => self.halt(bus),
             1 => {
                 let val = self.load(R8::from_bits(z), bus);
                 self.store(R8::from_bits(y), val, bus);
@@ -118,6 +120,8 @@ impl Cpu {
             4 => {
                 if y <= 3 {
                     self.call_if(self.regs.condition(y), bus);
+                } else {
+                    self.activity = Activity::Locked;
                 }
             }
             5 => self.execute_push_or_call(y, bus),
@@ -208,11 +212,10 @@ impl Cpu {
             }
             6 => {
                 self.ime = false;
-                self.ei_pending = false;
+                self.enable_delay = EnableDelay::Idle;
             }
-            7 => self.ei_pending = true,
-            // Undefined opcodes behave as NOP.
-            _ => {}
+            7 => self.enable_delay = EnableDelay::Requested,
+            _ => self.activity = Activity::Locked,
         }
     }
 
@@ -222,6 +225,8 @@ impl Cpu {
             self.push(self.regs.pair(R16::from_bits(y >> 1, R16::Af)), bus);
         } else if y == 1 {
             self.call_if(true, bus);
+        } else {
+            self.activity = Activity::Locked;
         }
     }
 

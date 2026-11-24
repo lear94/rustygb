@@ -4,7 +4,16 @@
 const T_CYCLES_PER_TICK: u16 = 4;
 /// Divider when the first opcode fetch begins after the DMG boot ROM.
 const POST_BOOT_DIVIDER: u16 = 0xABC8;
+/// Divider bit falling at 512 Hz.
+const AUDIO_CLOCK_BIT: u16 = 1 << 12;
+/// Divider bit falling at 8192 Hz.
+const SERIAL_CLOCK_BIT: u16 = 1 << 8;
 const TAC_ENABLE: u8 = 0x04;
+const TAC_RATE_MASK: u8 = 0x03;
+const TIMA_4096_HZ_BIT: u16 = 1 << 9;
+const TIMA_262144_HZ_BIT: u16 = 1 << 3;
+const TIMA_65536_HZ_BIT: u16 = 1 << 5;
+const TIMA_16384_HZ_BIT: u16 = 1 << 7;
 const TAC_MASK: u8 = 0x07;
 /// Bits that do not exist in TAC read as 1.
 const TAC_UNUSED: u8 = 0xF8;
@@ -17,6 +26,17 @@ enum Phase {
     Reloading,
 }
 
+/// What happened during one [`Timer::tick`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimerTick {
+    /// The timer interrupt is requested.
+    pub interrupt: bool,
+    /// The audio sequencer is clocked.
+    pub audio_clock: bool,
+    /// The serial port is clocked.
+    pub serial_clock: bool,
+}
+
 /// Divider and programmable timer.
 #[derive(Debug)]
 pub struct Timer {
@@ -26,6 +46,8 @@ pub struct Timer {
     tma: u8,
     tac: u8,
     phase: Phase,
+    /// Edges not reported yet, e.g. caused by a DIV write.
+    pending: TimerTick,
 }
 
 impl Timer {
@@ -38,16 +60,14 @@ impl Timer {
             tma: 0,
             tac: 0,
             phase: Phase::Counting,
+            pending: TimerTick::default(),
         }
     }
 
     /// Advances one M-cycle.
     ///
     /// The fastest rate has a 16 T-cycle period, so one M-cycle holds at most one edge.
-    ///
-    /// # Returns
-    /// Whether the timer interrupt is requested.
-    pub fn tick(&mut self) -> bool {
+    pub fn tick(&mut self) -> TimerTick {
         let reload = self.phase == Phase::Overflowed;
         if reload {
             self.tima = self.tma;
@@ -56,7 +76,8 @@ impl Timer {
             self.phase = Phase::Counting;
         }
         self.change_input(self.divider.wrapping_add(T_CYCLES_PER_TICK), self.tac);
-        reload
+        self.pending.interrupt = reload;
+        std::mem::take(&mut self.pending)
     }
 
     /// Clears the divider, as a DIV write or STOP does.
@@ -99,6 +120,9 @@ impl Timer {
     /// TIMA counts falling edges of the selected divider bit, whatever causes them.
     fn change_input(&mut self, divider: u16, tac: u8) {
         let before = input_level(self.divider, self.tac);
+        let fallen = self.divider & !divider;
+        self.pending.audio_clock |= fallen & AUDIO_CLOCK_BIT != 0;
+        self.pending.serial_clock |= fallen & SERIAL_CLOCK_BIT != 0;
         self.divider = divider;
         self.tac = tac;
         if before && !input_level(divider, tac) {
@@ -118,13 +142,13 @@ impl Default for Timer {
 }
 
 fn input_level(divider: u16, tac: u8) -> bool {
-    let bit = match tac & 3 {
-        0 => 9,
-        1 => 3,
-        2 => 5,
-        _ => 7,
+    let bit = match tac & TAC_RATE_MASK {
+        0 => TIMA_4096_HZ_BIT,
+        1 => TIMA_262144_HZ_BIT,
+        2 => TIMA_65536_HZ_BIT,
+        _ => TIMA_16384_HZ_BIT,
     };
-    tac & TAC_ENABLE != 0 && divider & (1 << bit) != 0
+    tac & TAC_ENABLE != 0 && divider & bit != 0
 }
 
 #[cfg(test)]
@@ -140,11 +164,14 @@ mod tests {
         let mut timer = Timer::new();
         timer.reset_divider();
         timer.write(TAC, tac);
+        timer.pending = TimerTick::default();
         timer
     }
 
     fn run(timer: &mut Timer, m_cycles: u32) -> u32 {
-        (0..m_cycles).map(|_| u32::from(timer.tick())).sum()
+        (0..m_cycles)
+            .map(|_| u32::from(timer.tick().interrupt))
+            .sum()
     }
 
     #[test]
@@ -172,9 +199,9 @@ mod tests {
         timer.write(TIMA, 0xFF);
         assert_eq!(run(&mut timer, 4), 0);
         assert_eq!(timer.read(TIMA), 0);
-        assert!(timer.tick());
+        assert!(timer.tick().interrupt);
         assert_eq!(timer.read(TIMA), 0x42);
-        assert!(!timer.tick());
+        assert!(!timer.tick().interrupt);
     }
 
     #[test]
@@ -183,7 +210,7 @@ mod tests {
         timer.write(TIMA, 0xFF);
         run(&mut timer, 4);
         timer.write(TIMA, 0x10);
-        assert!(!timer.tick());
+        assert!(!timer.tick().interrupt);
         assert_eq!(timer.read(TIMA), 0x10);
     }
 
@@ -220,5 +247,24 @@ mod tests {
         run(&mut timer, 64);
         assert_eq!(timer.read(DIV), 1);
         assert_eq!(timer.read(0), 0xFF);
+    }
+
+    #[test]
+    fn tick_reports_divider_clocks() {
+        let mut timer = timer(0);
+        let ticks: Vec<TimerTick> = (0..2048).map(|_| timer.tick()).collect();
+        assert_eq!(ticks.iter().filter(|tick| tick.serial_clock).count(), 16);
+        assert_eq!(ticks.iter().filter(|tick| tick.audio_clock).count(), 1);
+        assert!(ticks[2047].audio_clock);
+    }
+
+    #[test]
+    fn write_div_on_high_bits_clocks() {
+        let mut timer = timer(0);
+        run(&mut timer, 1024 + 64);
+        timer.write(DIV, 0);
+        let tick = timer.tick();
+        assert!(tick.audio_clock && tick.serial_clock);
+        assert!(!timer.tick().audio_clock);
     }
 }

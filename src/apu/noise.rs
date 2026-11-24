@@ -39,6 +39,9 @@ impl Noise {
 
     /// Advances one M-cycle; the shortest period spans two.
     pub(super) fn tick(&mut self) {
+        if !self.enabled {
+            return;
+        }
         self.timer = self.timer.saturating_sub(u32::from(T_CYCLES_PER_TICK));
         if self.timer != 0 {
             return;
@@ -89,7 +92,7 @@ impl Noise {
         if !self.enabled {
             return 0.0;
         }
-        let amplitude = f32::from(self.envelope.volume()) / 15.0;
+        let amplitude = self.envelope.amplitude();
         if self.lfsr & 1 == 0 {
             amplitude
         } else {

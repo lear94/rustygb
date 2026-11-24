@@ -58,6 +58,8 @@ pub const CYCLES_PER_FRAME: u32 = 70_224;
 pub struct GameBoy {
     cpu: Cpu,
     bus: Motherboard,
+    /// T-cycles the last frame ran over its budget.
+    overshoot: u32,
 }
 
 impl GameBoy {
@@ -83,15 +85,18 @@ impl GameBoy {
         Ok(Self {
             cpu: Cpu::new(),
             bus: Motherboard::new(cartridge, sample_rate),
+            overshoot: 0,
         })
     }
 
     /// Run the CPU for one full frame's worth of T-cycles.
     pub fn run_frame(&mut self) {
-        let mut cycles: u32 = 0;
+        let mut cycles = self.overshoot;
         while cycles < CYCLES_PER_FRAME {
             cycles += self.cpu.step(&mut self.bus);
         }
+        // Carried over, or video and audio would drift.
+        self.overshoot = cycles - CYCLES_PER_FRAME;
     }
 
     /// Borrow the current 160×144 RGBA frame buffer.
@@ -130,5 +135,49 @@ impl GameBoy {
     /// Direct access to the underlying CPU (advanced use).
     pub fn cpu(&mut self) -> &mut Cpu {
         &mut self.cpu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Machine running `program` at the entry point.
+    fn game(program: &[u8]) -> GameBoy {
+        let mut rom = vec![0; 0x8000];
+        rom[0x100..0x100 + program.len()].copy_from_slice(program);
+        GameBoy::from_rom(rom, 48_000).expect("valid ROM")
+    }
+
+    #[test]
+    fn run_frame_long_run_does_not_drift() {
+        let mut gb = game(&[0xCD, 0x05, 0x01, 0x18, 0xFB, 0xC9]);
+        let mut scratch = vec![0.0; 8192];
+        let samples: usize = (0..600)
+            .map(|_| {
+                gb.run_frame();
+                gb.drain_audio(&mut scratch)
+            })
+            .sum();
+        assert_eq!(samples, 600 * 70_224 * 48_000 / 4_194_304);
+    }
+
+    #[test]
+    fn run_frame_stopped_machine_returns() {
+        let mut gb = game(&[0x10, 0x00]);
+        gb.run_frame();
+        assert!(gb.buffered_audio() > 700);
+    }
+
+    #[test]
+    fn set_button_reaches_joypad() {
+        let mut gb = game(&[0x18, 0xFE]);
+        gb.set_button(Button::A, true);
+        assert_eq!(gb.bus().read_byte(0xFF00) & 0x0F, 0x0E);
+    }
+
+    #[test]
+    fn from_rom_invalid_is_error() {
+        assert!(GameBoy::from_rom(Vec::new(), 48_000).is_err());
     }
 }

@@ -221,3 +221,118 @@ fn step_stop_freezes_until_button() {
     cpu.step(&mut bus);
     assert_eq!(cpu.regs.b, 1);
 }
+
+#[test]
+fn step_interrupt_after_redundant_ei_does_not_nest() {
+    let (mut cpu, mut bus) = machine(&[0xFB, 0x00]);
+    cpu.ime = true;
+    bus.write_byte(IE, 0x0C);
+    cpu.step(&mut bus);
+    bus.write_byte(IF, 0x0C);
+    cpu.step(&mut bus);
+    cpu.step(&mut bus);
+    assert_eq!((cpu.regs.pc, cpu.ime), (0x51, false));
+}
+
+#[test]
+fn step_ei_halt_pending_returns_to_halt() {
+    let (mut cpu, mut bus) = machine(&[0xFB, 0x76]);
+    bus.write_byte(IE, 4);
+    bus.write_byte(IF, 4);
+    (0..3).for_each(|_| {
+        cpu.step(&mut bus);
+    });
+    assert_eq!(cpu.regs.pc, 0x50);
+    assert_eq!(bus.read_byte(cpu.regs.sp), 0x01, "address of the HALT");
+}
+
+#[test]
+fn step_undefined_opcode_locks_cpu() {
+    for op in [
+        0xD3, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD,
+    ] {
+        let (mut cpu, mut bus) = machine(&[op, 0x04]);
+        bus.write_byte(IE, 4);
+        cpu.ime = true;
+        cpu.step(&mut bus);
+        bus.write_byte(IF, 4);
+        assert_eq!(cpu.step(&mut bus), 4);
+        assert_eq!((cpu.regs.pc, cpu.regs.b), (CODE + 1, 0), "{op:#x}");
+    }
+}
+
+#[test]
+fn step_conditionals_follow_every_flag() {
+    for (block, taken, skipped) in [(0x20, 12, 8), (0xC0, 20, 8), (0xC2, 16, 12), (0xC4, 24, 12)] {
+        for (condition, f, is_taken) in [
+            (0, 0, true),
+            (0, FLAG_Z, false),
+            (1, FLAG_Z, true),
+            (1, 0, false),
+            (2, 0, true),
+            (2, FLAG_C, false),
+            (3, FLAG_C, true),
+            (3, 0, false),
+        ] {
+            let op = block | (condition << 3);
+            let (mut cpu, mut bus) = machine(&[op, 0x00, 0xD8]);
+            cpu.regs.f = f;
+            let expected = if is_taken { taken } else { skipped };
+            assert_eq!(cpu.step(&mut bus), expected, "{op:#x} F={f:#x}");
+        }
+    }
+}
+
+#[test]
+fn step_stack_and_pointer_results() {
+    for (code, hl, sp, pc) in [
+        (&[0xE8, 0xFE][..], 0xD000, DATA - 2, CODE + 2),
+        (&[0xF8, 0x02], DATA + 2, DATA, CODE + 2),
+        (&[0xF9], 0xD000, 0xD000, CODE + 1),
+        (&[0xE9], 0xD000, DATA, 0xD000),
+    ] {
+        let (mut cpu, mut bus) = machine(code);
+        cpu.step(&mut bus);
+        let regs = cpu.regs;
+        assert_eq!(
+            (regs.pair(R16::Hl), regs.sp, regs.pc),
+            (hl, sp, pc),
+            "{code:x?}"
+        );
+    }
+}
+
+#[test]
+fn step_reti_returns_and_enables() {
+    let (mut cpu, mut bus) = machine(&[0xD9]);
+    bus.write_byte(DATA, 0x34);
+    bus.write_byte(DATA + 1, 0x12);
+    cpu.step(&mut bus);
+    assert_eq!((cpu.regs.pc, cpu.ime), (0x1234, true));
+}
+
+#[test]
+fn step_push_pop_af_drops_low_nibble() {
+    let (mut cpu, mut bus) = machine(&[0xF5, 0xC1, 0xC5, 0xF1]);
+    (cpu.regs.a, cpu.regs.f) = (0x12, 0xF0);
+    cpu.step(&mut bus);
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pair(R16::Bc), 0x12F0);
+    cpu.regs.c = 0xFF;
+    cpu.step(&mut bus);
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pair(R16::Af), 0x12F0);
+}
+
+#[test]
+fn step_high_page_transfers_use_ff00() {
+    for (store, load) in [(&[0xE0, 0x80][..], &[0xF0, 0x80][..]), (&[0xE2], &[0xF2])] {
+        let (mut cpu, mut bus) = machine(&[store, load].concat());
+        (cpu.regs.a, cpu.regs.c) = (0x5A, 0x80);
+        cpu.step(&mut bus);
+        assert_eq!(bus.read_byte(0xFF80), 0x5A);
+        cpu.regs.a = 0;
+        cpu.step(&mut bus);
+        assert_eq!(cpu.regs.a, 0x5A);
+    }
+}

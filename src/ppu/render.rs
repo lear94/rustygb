@@ -1,6 +1,6 @@
 //! Scanline composition: background, window and sprites.
 
-use super::{Ppu, PIXEL_LEN, ROW_LEN, SCREEN_WIDTH, VRAM_BASE};
+use super::{Ppu, DOTS_PER_TICK, PIXEL_LEN, ROW_LEN, SCREEN_WIDTH, VRAM_BASE};
 
 const LCDC_WINDOW_MAP: u8 = 0x40;
 const LCDC_WINDOW_ON: u8 = 0x20;
@@ -26,6 +26,8 @@ const WINDOW_MAX_X: u8 = 166;
 const SPRITE_LEN: usize = 4;
 const MAX_SPRITES_PER_LINE: usize = 10;
 const SPRITE_Y_OFFSET: u8 = 16;
+const SPRITE_FETCH_DOTS: u16 = 6;
+const SPRITE_MAX_WAIT_DOTS: u16 = 5;
 const SPRITE_X_OFFSET: u8 = 8;
 const SPRITE_BEHIND_BG: u8 = 0x80;
 const SPRITE_FLIP_Y: u8 = 0x40;
@@ -73,8 +75,49 @@ struct LineSprites {
 }
 
 impl Ppu {
-    /// Draws the current line into the frame.
+    /// Shows the lightest shade everywhere, as with the LCD off.
+    pub(super) fn blank_frame(&mut self) {
+        let [lightest, ..] = SHADES;
+        self.frame.as_chunks_mut::<PIXEL_LEN>().0.fill(lightest);
+    }
+
+    /// Dots the current line extends mode 3, on the M-cycle grid.
+    pub(super) fn drawing_penalty(&self) -> u16 {
+        let scroll = u16::from(self.scx % TILE_SIZE_PX).next_multiple_of(DOTS_PER_TICK);
+        let sprites = if self.lcdc & LCDC_SPRITES_ON != 0 {
+            self.sprite_penalty()
+        } else {
+            0
+        };
+        scroll + (sprites - sprites % DOTS_PER_TICK)
+    }
+
+    /// Each sprite costs its fetch plus, once per background tile, the wait for that
+    /// tile's remaining pixels.
+    fn sprite_penalty(&self) -> u16 {
+        let found = self.line_sprites();
+        let mut last_tile = None;
+        let visible = found.sprites.iter().take(found.len);
+        visible
+            .filter(|sprite| usize::from(sprite.x) < SCREEN_WIDTH + usize::from(SPRITE_X_OFFSET))
+            .map(|sprite| {
+                let position = u16::from(sprite.x) + u16::from(self.scx % TILE_SIZE_PX);
+                let tile = position / u16::from(TILE_SIZE_PX);
+                let offset = position % u16::from(TILE_SIZE_PX);
+                let wait = if last_tile == Some(tile) {
+                    0
+                } else {
+                    SPRITE_MAX_WAIT_DOTS.saturating_sub(offset)
+                };
+                last_tile = Some(tile);
+                SPRITE_FETCH_DOTS + wait
+            })
+            .sum()
+    }
+
+    /// Draws the current line into the back buffer.
     pub(super) fn render_line(&mut self) {
+        self.window_triggered |= self.ly == self.wy;
         let mut colors = [0; SCREEN_WIDTH];
         if self.lcdc & LCDC_BG_ON != 0 {
             self.draw_background(&mut colors);
@@ -83,7 +126,7 @@ impl Ppu {
         if self.lcdc & LCDC_SPRITES_ON != 0 {
             self.draw_sprites(&colors, &mut shades);
         }
-        let (rows, _) = self.frame.as_chunks_mut::<ROW_LEN>();
+        let (rows, _) = self.back.as_chunks_mut::<ROW_LEN>();
         let Some(row) = rows.get_mut(usize::from(self.ly)) else {
             return;
         };
@@ -98,9 +141,7 @@ impl Ppu {
         let map = self.map_base(LCDC_BG_MAP);
         self.draw_tiles(colors, map, self.scx, self.ly.wrapping_add(self.scy));
 
-        let window_visible =
-            self.lcdc & LCDC_WINDOW_ON != 0 && self.wx <= WINDOW_MAX_X && self.ly >= self.wy;
-        if !window_visible {
+        if !self.window_visible() {
             return;
         }
         let start = usize::from(self.wx.saturating_sub(WINDOW_X_OFFSET));
@@ -110,6 +151,10 @@ impl Ppu {
             self.draw_tiles(visible, map, hidden, self.window_line);
         }
         self.window_line += 1;
+    }
+
+    fn window_visible(&self) -> bool {
+        self.lcdc & LCDC_WINDOW_ON != 0 && self.window_triggered && self.wx <= WINDOW_MAX_X
     }
 
     /// Fills `colors` from a tile map, starting at map coordinates `x`, `y`.
@@ -249,17 +294,19 @@ fn shade(palette: u8, color: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Mode;
     use super::*;
 
     const SOLID: u8 = 1;
 
-    /// Tile 1 is solid color 3; BG shows tile 0 (blank); identity palettes.
+    /// In H-Blank, so video memory is accessible; tile 1 is solid color 3; BG shows tile 0 (blank); identity palettes.
     fn ppu() -> Ppu {
         let mut ppu = Ppu::new();
+        ppu.mode = Mode::HBlank;
         for offset in 0..16 {
             ppu.write(0x8010 + offset, 0xFF);
         }
-        ppu.write(0xFF40, 0x93);
+        ppu.lcdc = 0x93;
         ppu.write(0xFF47, 0xE4);
         ppu.write(0xFF48, 0xE4);
         ppu.write(0xFF49, 0x1B);
@@ -275,7 +322,7 @@ mod tests {
     /// Shade indices of the first rendered line.
     fn line(ppu: &mut Ppu) -> Vec<usize> {
         ppu.render_line();
-        ppu.frame()[..ROW_LEN]
+        ppu.back[..ROW_LEN]
             .as_chunks::<PIXEL_LEN>()
             .0
             .iter()
@@ -314,7 +361,7 @@ mod tests {
     fn draw_background_disabled_is_color_zero() {
         let mut ppu = ppu();
         ppu.write(0x9800, SOLID);
-        ppu.write(0xFF40, 0x92);
+        ppu.lcdc = 0x92;
         assert_eq!(lit(&mut ppu), []);
     }
 
@@ -343,7 +390,7 @@ mod tests {
         ] {
             let mut ppu = ppu();
             ppu.write(0x9C00, SOLID);
-            ppu.write(0xFF40, 0xF1);
+            ppu.lcdc = 0xF1;
             ppu.write(0xFF4B, wx);
             assert_eq!(lit(&mut ppu), expected.collect::<Vec<_>>(), "WX {wx}");
             assert_eq!(ppu.window_line, u8::from(wx <= 166));
@@ -436,6 +483,51 @@ mod tests {
                 ..Sprite::default()
             };
             assert_eq!(ppu.sprite_line(sprite), expected);
+        }
+    }
+
+    #[test]
+    fn window_triggers_on_exact_line_only() {
+        for (wy, start, triggered) in [(5, 5, true), (4, 5, false), (6, 5, false)] {
+            let mut ppu = ppu();
+            ppu.ly = start;
+            ppu.write(0xFF4A, wy);
+            ppu.render_line();
+            assert_eq!(ppu.window_triggered, triggered);
+        }
+    }
+
+    #[test]
+    fn window_already_triggered_ignores_wy() {
+        let mut ppu = ppu();
+        ppu.write(0x9C00, SOLID);
+        ppu.lcdc = 0xF1;
+        ppu.write(0xFF4B, 7);
+        ppu.render_line();
+        ppu.write(0xFF4A, 100);
+        ppu.render_line();
+        assert_eq!(ppu.window_line, 2);
+    }
+
+    #[test]
+    fn drawing_penalty_counts_scroll_and_sprites() {
+        for (scx, sprites, expected) in [
+            (0, &[][..], 0),
+            (1, &[], 4),
+            (5, &[], 8),
+            (8, &[], 0),
+            (0, &[0], 8),
+            (0, &[5], 4),
+            (0, &[168], 0),
+            (0, &[0, 0], 16),
+            (0, &[0, 8], 20),
+        ] {
+            let mut ppu = ppu();
+            ppu.write(0xFF43, scx);
+            for (idx, &x) in sprites.iter().enumerate() {
+                put_sprite(&mut ppu, idx, [16, x, SOLID, 0]);
+            }
+            assert_eq!(ppu.drawing_penalty(), expected, "{scx} {sprites:?}");
         }
     }
 }

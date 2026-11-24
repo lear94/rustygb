@@ -35,13 +35,13 @@ const POST_BOOT_IF: u8 = 0xE1;
 pub struct Motherboard {
     cartridge: Cartridge,
     /// Video.
-    pub ppu: Ppu,
+    pub(crate) ppu: Ppu,
     /// Audio.
-    pub apu: Apu,
+    pub(crate) apu: Apu,
     /// Divider and timer.
-    pub timer: Timer,
+    pub(crate) timer: Timer,
     /// Buttons.
-    pub joypad: Joypad,
+    pub(crate) joypad: Joypad,
     serial: Serial,
     dma: OamDma,
     wram: [u8; WRAM_LEN],
@@ -72,22 +72,28 @@ impl Motherboard {
     /// Advances every peripheral by one M-cycle.
     pub fn tick(&mut self) {
         self.cartridge.tick();
-        if self.timer.tick() {
+        let tick = self.timer.tick();
+        if tick.interrupt {
             self.if_reg |= IRQ_TIMER;
+        }
+        if tick.serial_clock && self.serial.clock() {
+            self.if_reg |= IRQ_SERIAL;
         }
         if let Some(copy) = self.dma.tick() {
             let byte = self.read_unblocked(copy.source);
             self.ppu.write_oam(usize::from(copy.oam_idx), byte);
         }
         self.if_reg |= self.ppu.tick();
-        self.apu.tick();
+        self.apu.tick(tick.audio_clock);
 
-        if self.serial.tick() {
-            self.if_reg |= IRQ_SERIAL;
-        }
-        if std::mem::take(&mut self.joypad.interrupt) {
+        if self.joypad.take_interrupt() {
             self.if_reg |= IRQ_JOYPAD;
         }
+    }
+
+    /// Lets one M-cycle of host time pass while STOP holds the system clock.
+    pub(crate) fn tick_stopped(&mut self) {
+        self.apu.tick_stopped();
     }
 
     /// Borrows the inserted cartridge.
@@ -143,7 +149,8 @@ impl Motherboard {
                 .get(usize::from(addr & WRAM_MASK))
                 .copied()
                 .unwrap_or(OPEN_BUS),
-            0xFEA0..=0xFEFF => OPEN_BUS,
+            // DMG decodes no device here and drives zeros.
+            0xFEA0..=0xFEFF => 0,
             0xFF00..=0xFFFF => self.read_high(addr),
         }
     }

@@ -209,6 +209,7 @@ mod tests {
                 difference.alu(SUB, bcd(y));
                 difference.accumulator_op(DAA);
                 assert_eq!(difference.a, bcd((100 + x - y) % 100), "{x}-{y}");
+                assert_eq!(difference.has_flag(FLAG_C), x < y);
             }
         }
     }

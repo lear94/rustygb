@@ -75,7 +75,7 @@ pub struct Registers {
     /// Accumulator.
     pub a: u8,
     /// Flags; the low nibble is always zero.
-    pub f: u8,
+    pub(crate) f: u8,
     /// Register B.
     pub b: u8,
     /// Register C.
@@ -108,6 +108,12 @@ impl Registers {
         sp: 0xFFFE,
         pc: 0x0100,
     };
+
+    /// Returns the flags register; its low nibble is always zero.
+    #[must_use]
+    pub fn flags(&self) -> u8 {
+        self.f
+    }
 
     pub(super) fn pair(&self, pair: R16) -> u16 {
         match pair {

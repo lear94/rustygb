@@ -1,8 +1,11 @@
 use super::*;
 
+/// Machine with the LCD off, so video memory is accessible.
 fn bus() -> Motherboard {
     let cartridge = Cartridge::from_bytes(vec![0; 0x8000], None).expect("blank ROM is valid");
-    Motherboard::new(cartridge, 48_000)
+    let mut bus = Motherboard::new(cartridge, 48_000);
+    bus.write_byte(0xFF40, 0);
+    bus
 }
 
 #[test]
@@ -27,7 +30,7 @@ fn write_byte_echo_mirrors_wram() {
 #[test]
 fn read_byte_unmapped_is_open_bus() {
     let mut bus = bus();
-    for addr in [0xA000, 0xFEA0, 0xFEFF, 0xFF03, 0xFF4C, 0xFF7F] {
+    for addr in [0xA000, 0xFF03, 0xFF4C, 0xFF7F] {
         bus.write_byte(addr, 0);
         assert_eq!(bus.read_byte(addr), OPEN_BUS, "{addr:#06x}");
     }
@@ -68,4 +71,35 @@ fn tick_timer_overflow_requests_interrupt() {
     bus.write_byte(0xFF07, 5);
     (0..8).for_each(|_| bus.tick());
     assert_eq!(bus.read_byte(0xFF0F) & IRQ_TIMER, IRQ_TIMER);
+}
+
+#[test]
+fn read_byte_unusable_area_is_zero() {
+    for addr in [0xFEA0, 0xFEFF] {
+        assert_eq!(bus().read_byte(addr), 0);
+    }
+}
+
+#[test]
+fn tick_serial_transfer_follows_divider() {
+    let mut bus = bus();
+    bus.write_byte(0xFF04, 0);
+    bus.tick();
+    bus.write_byte(0xFF0F, 0);
+    bus.write_byte(0xFF02, 0x81);
+    (0..1022).for_each(|_| bus.tick());
+    assert_eq!(bus.read_byte(0xFF0F) & IRQ_SERIAL, 0);
+    bus.tick();
+    assert_eq!(bus.read_byte(0xFF0F) & IRQ_SERIAL, IRQ_SERIAL);
+}
+
+#[test]
+fn tick_stopped_produces_silence() {
+    let mut bus = bus();
+    (0..1_048_576 / 8).for_each(|_| bus.tick_stopped());
+    let mut samples = vec![1.0; 6_001];
+    assert_eq!(bus.apu.drain_samples(&mut samples), 6_000);
+    assert!(samples[..6_000]
+        .iter()
+        .all(|sample| sample.abs() < f32::EPSILON));
 }

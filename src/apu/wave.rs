@@ -1,10 +1,12 @@
 //! Wave channel: CH3 plays 32 four-bit samples from wave RAM.
 
 use super::length::Length;
-use super::{Control, MAX_FREQUENCY, T_CYCLES_PER_TICK};
+use super::{Control, MAX_FREQUENCY, OPEN_BUS, T_CYCLES_PER_TICK};
 
 const LENGTH_MAX: u16 = 256;
 pub(super) const WAVE_RAM_LEN: usize = 16;
+/// Bytes a retrigger overwrites, and the alignment it copies from.
+const CORRUPTION_LEN: usize = 4;
 const POSITION_MASK: u8 = 31;
 const DAC_ENABLE: u8 = 0x80;
 const T_CYCLES_PER_PERIOD_UNIT: u16 = 2;
@@ -24,6 +26,8 @@ pub(super) struct Wave {
     timer: u16,
     position: u8,
     current: u8,
+    /// Wave RAM is on the bus at the moment of a CPU access.
+    just_read: bool,
 }
 
 impl Wave {
@@ -38,6 +42,7 @@ impl Wave {
             timer: period(0),
             position: 0,
             current: 0,
+            just_read: false,
         }
     }
 
@@ -47,11 +52,14 @@ impl Wave {
             return;
         }
         let mut elapsed = T_CYCLES_PER_TICK;
+        self.just_read = false;
         while elapsed >= self.timer {
             elapsed -= self.timer;
             self.timer = period(self.frequency);
             self.position = (self.position + 1) & POSITION_MASK;
             self.current = self.nibble();
+            // CPU accesses land on the last T-cycles of the M-cycle.
+            self.just_read = elapsed == 0;
         }
         self.timer -= elapsed;
     }
@@ -85,6 +93,10 @@ impl Wave {
             self.enabled = false;
         }
         if control.trigger {
+            if self.enabled && self.timer == T_CYCLES_PER_PERIOD_UNIT {
+                self.corrupt_ram();
+            }
+            self.just_read = false;
             self.timer = period(self.frequency) + TRIGGER_DELAY_T_CYCLES;
             self.position = 0;
             self.enabled = self.dac_enabled;
@@ -97,16 +109,32 @@ impl Wave {
         }
     }
 
-    /// Reads wave RAM; while playing, every address hits the byte being played.
+    /// Reads wave RAM; while playing, only the byte the channel is reading answers.
     pub(super) fn read_ram(&self, idx: usize) -> u8 {
-        self.ram.get(self.ram_idx(idx)).copied().unwrap_or(0xFF)
+        self.ram_idx(idx)
+            .and_then(|idx| self.ram.get(idx))
+            .copied()
+            .unwrap_or(OPEN_BUS)
     }
 
-    /// Writes wave RAM; while playing, every address hits the byte being played.
+    /// Writes wave RAM; while playing, only the byte the channel is reading is reachable.
     pub(super) fn write_ram(&mut self, idx: usize, val: u8) {
-        let idx = self.ram_idx(idx);
-        if let Some(cell) = self.ram.get_mut(idx) {
+        if let Some(cell) = self.ram_idx(idx).and_then(|idx| self.ram.get_mut(idx)) {
             *cell = val;
+        }
+    }
+
+    /// DMG quirk: retriggering as a byte is fetched overwrites the start of wave RAM.
+    fn corrupt_ram(&mut self) {
+        let fetched = usize::from(((self.position + 1) & POSITION_MASK) >> 1);
+        if fetched < CORRUPTION_LEN {
+            let byte = self.ram.get(fetched).copied().unwrap_or(0);
+            if let Some(first) = self.ram.first_mut() {
+                *first = byte;
+            }
+        } else {
+            let start = fetched - fetched % CORRUPTION_LEN;
+            self.ram.copy_within(start..start + CORRUPTION_LEN, 0);
         }
     }
 
@@ -124,11 +152,11 @@ impl Wave {
         (f32::from(self.current) / SAMPLE_MIDPOINT - 1.0) * scale
     }
 
-    fn ram_idx(&self, idx: usize) -> usize {
-        if self.enabled {
-            usize::from(self.position >> 1)
-        } else {
-            idx
+    fn ram_idx(&self, idx: usize) -> Option<usize> {
+        match (self.enabled, self.just_read) {
+            (false, _) => Some(idx),
+            (true, true) => Some(usize::from(self.position >> 1)),
+            (true, false) => None,
         }
     }
 
@@ -217,12 +245,31 @@ mod tests {
     }
 
     #[test]
-    fn read_ram_while_playing_hits_current_byte() {
-        let wave = playing();
-        assert_eq!(wave.read_ram(9), wave.read_ram(0));
-        let mut stopped = playing();
-        stopped.write_dac(0);
-        assert_eq!(stopped.read_ram(9), 0x96);
+    fn read_ram_while_playing_needs_fetch_cycle() {
+        let mut wave = playing();
+        wave.tick();
+        assert_eq!(wave.read_ram(9), OPEN_BUS);
+        wave.write_ram(9, 0);
+        wave.write_frequency_low(0xFE);
+        wave.tick();
+        wave.tick();
+        assert!(!wave.just_read);
+        wave.timer = T_CYCLES_PER_TICK;
+        wave.tick();
+        assert_eq!(wave.read_ram(9), wave.ram[usize::from(wave.position >> 1)]);
+        wave.write_dac(0);
+        assert_eq!(wave.read_ram(9), 0x96);
+    }
+
+    #[test]
+    fn write_control_retrigger_during_fetch_corrupts_ram() {
+        for (position, expected) in [(3, [0x2D, 0x1E, 0x2D, 0x3C]), (9, [0x4B, 0x5A, 0x69, 0x78])] {
+            let mut wave = playing();
+            wave.position = position;
+            wave.timer = T_CYCLES_PER_PERIOD_UNIT;
+            wave.write_control(TRIGGER);
+            assert_eq!(wave.ram[..4], expected);
+        }
     }
 
     #[test]

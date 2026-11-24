@@ -26,6 +26,18 @@ enum Activity {
     Halted,
     /// Waiting for a button, with the system clock off.
     Stopped,
+    /// Hung by an undefined opcode until reset.
+    Locked,
+}
+
+/// Progress of an EI, which takes effect after the following instruction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum EnableDelay {
+    #[default]
+    Idle,
+    Requested,
+    /// The current instruction is the one following EI.
+    Applied,
 }
 
 /// SM83 CPU state.
@@ -36,8 +48,7 @@ pub struct Cpu {
     /// Interrupt master enable.
     pub ime: bool,
     activity: Activity,
-    /// EI takes effect after the following instruction.
-    ei_pending: bool,
+    enable_delay: EnableDelay,
     /// The next fetch does not advance PC.
     halt_bug: bool,
     /// M-cycles consumed by the current step.
@@ -68,26 +79,41 @@ impl Cpu {
         match self.activity {
             Activity::Stopped if !bus.joypad.any_selected_pressed() => {
                 // Time passes for the host only.
+                bus.tick_stopped();
                 self.m_cycles += 1;
                 return;
             }
-            Activity::Halted if bus.pending_interrupts() == 0 => return self.idle(bus),
-            _ => self.activity = Activity::Running,
+            Activity::Locked => return self.idle(bus),
+            Activity::Stopped => self.activity = Activity::Running,
+            Activity::Running | Activity::Halted => {}
         }
         // Hardware samples interrupts during the opcode fetch, then discards the opcode.
         let op = self.read(self.regs.pc, bus);
-        if self.ime && bus.pending_interrupts() != 0 {
+        let pending = bus.pending_interrupts() != 0;
+        if self.activity == Activity::Halted {
+            // HALT keeps fetching, so the cycle that wakes it is already the fetch.
+            if !pending {
+                return;
+            }
+            self.activity = Activity::Running;
+        }
+        if self.ime && pending {
             return self.dispatch_interrupt(bus);
         }
-        if std::mem::take(&mut self.ei_pending) {
-            self.ime = true;
-        }
+        self.enable_delay = match self.enable_delay {
+            EnableDelay::Requested => {
+                self.ime = true;
+                EnableDelay::Applied
+            }
+            _ => EnableDelay::Idle,
+        };
         self.advance_pc();
         self.execute(op, bus);
     }
 
     fn dispatch_interrupt(&mut self, bus: &mut Motherboard) {
         self.ime = false;
+        self.enable_delay = EnableDelay::Idle;
         self.idle(bus);
         let [high, low] = self.regs.pc.to_be_bytes();
         self.push_byte(high, bus);
@@ -101,7 +127,11 @@ impl Cpu {
     }
 
     fn halt(&mut self, bus: &Motherboard) {
-        if !self.ime && bus.pending_interrupts() != 0 {
+        let pending = bus.pending_interrupts() != 0;
+        if pending && self.enable_delay == EnableDelay::Applied {
+            // Hardware quirk: the handler of EI + HALT returns to the HALT itself.
+            self.regs.pc = self.regs.pc.wrapping_sub(1);
+        } else if pending && !self.ime {
             self.halt_bug = true;
         } else {
             self.activity = Activity::Halted;

@@ -41,6 +41,9 @@ impl Square {
 
     /// Advances one M-cycle, which is also the shortest possible step.
     pub(super) fn tick(&mut self) {
+        if !self.enabled {
+            return;
+        }
         self.timer = self.timer.saturating_sub(T_CYCLES_PER_TICK);
         if self.timer == 0 {
             self.timer = period(self.frequency);
@@ -109,7 +112,7 @@ impl Square {
         if !self.enabled {
             return 0.0;
         }
-        let amplitude = f32::from(self.envelope.volume()) / 15.0;
+        let amplitude = self.envelope.amplitude();
         if self.is_high() {
             amplitude
         } else {
