@@ -1,8 +1,12 @@
 /target
 **/*.rs.bk
-Cargo.lock
 .DS_Store
 
 # WebAssembly build output
 /pkg
 *.wasm
+CLAUDE.md
+.claude/rules/hotpath-*.md
+.claude/settings.local.json
+*:Zone.Identifier
+*.bak.[0-9]*

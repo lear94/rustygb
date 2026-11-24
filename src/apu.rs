@@ -259,7 +259,7 @@ impl Apu {
             self.frame_div -= 8192;
             self.frame_step = (self.frame_step + 1) & 7;
 
-            if self.frame_step % 2 == 0 {
+            if self.frame_step.is_multiple_of(2) {
                 Self::tick_length(&mut self.ch1);
                 Self::tick_length(&mut self.ch2);
                 Self::tick_length(&mut self.ch4);

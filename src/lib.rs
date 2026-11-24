@@ -4,7 +4,7 @@
 //! Rust. The same crate is used by:
 //!
 //! * the native binary defined in `src/main.rs` (winit + pixels + cpal)
-//! * the WebAssembly front-end built with `wasm-pack` (see [`wasm`])
+//! * the WebAssembly front-end built with `wasm-pack` (see `wasm.rs`)
 //! * downstream tests and tooling that want to drive the emulator
 //!   programmatically
 //!

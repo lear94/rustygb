@@ -4,10 +4,10 @@
 //!
 //! | Header byte `0x147` | Implementation |
 //! |---------------------|----------------|
-//! | `0x00`              | [`RomOnly`]    |
-//! | `0x01..=0x03`       | [`Mbc1`]       |
-//! | `0x0F..=0x13`       | [`Mbc3`] (no RTC) |
-//! | `0x19..=0x1E`       | [`Mbc5`]       |
+//! | `0x00`              | `RomOnly`    |
+//! | `0x01..=0x03`       | `Mbc1`       |
+//! | `0x0F..=0x13`       | `Mbc3` (no RTC) |
+//! | `0x19..=0x1E`       | `Mbc5`       |
 //!
 //! Battery-backed SRAM is auto-saved next to the ROM with the `.sav`
 //! extension. The format is a raw dump of the cartridge RAM so it is
@@ -203,13 +203,11 @@ impl Cartridge for Mbc3 {
             0x6000..=0x7FFF => {
                 // RTC latch — accepted to keep games happy, not implemented.
             }
-            0xA000..=0xBFFF => {
-                if self.ram_on && self.ram_bank <= 0x03 {
-                    let offset = self.ram_bank * 0x2000 + (addr as usize - 0xA000);
-                    if offset < self.ram.len() {
-                        self.ram[offset] = val;
-                        self.dirty = true;
-                    }
+            0xA000..=0xBFFF if self.ram_on && self.ram_bank <= 0x03 => {
+                let offset = self.ram_bank * 0x2000 + (addr as usize - 0xA000);
+                if offset < self.ram.len() {
+                    self.ram[offset] = val;
+                    self.dirty = true;
                 }
             }
             _ => {}
@@ -246,13 +244,9 @@ impl Cartridge for Mbc5 {
                 let offset = (self.rb & self.rom_mask) * 0x4000 + (addr as usize - 0x4000);
                 self.rom[offset & (self.rom.len() - 1)]
             }
-            0xA000..=0xBFFF => {
-                if self.ram_on && !self.ram.is_empty() {
-                    let offset = self.ab * 0x2000 + (addr as usize - 0xA000);
-                    self.ram.get(offset).copied().unwrap_or(0xFF)
-                } else {
-                    0xFF
-                }
+            0xA000..=0xBFFF if self.ram_on && !self.ram.is_empty() => {
+                let offset = self.ab * 0x2000 + (addr as usize - 0xA000);
+                self.ram.get(offset).copied().unwrap_or(0xFF)
             }
             _ => 0xFF,
         }
@@ -264,13 +258,11 @@ impl Cartridge for Mbc5 {
             0x2000..=0x2FFF => self.rb = (self.rb & 0x100) | val as usize,
             0x3000..=0x3FFF => self.rb = (self.rb & 0xFF) | ((val as usize & 1) << 8),
             0x4000..=0x5FFF => self.ab = (val & 0x0F) as usize,
-            0xA000..=0xBFFF => {
-                if self.ram_on && !self.ram.is_empty() {
-                    let offset = self.ab * 0x2000 + (addr as usize - 0xA000);
-                    if offset < self.ram.len() {
-                        self.ram[offset] = val;
-                        self.dirty = true;
-                    }
+            0xA000..=0xBFFF if self.ram_on && !self.ram.is_empty() => {
+                let offset = self.ab * 0x2000 + (addr as usize - 0xA000);
+                if offset < self.ram.len() {
+                    self.ram[offset] = val;
+                    self.dirty = true;
                 }
             }
             _ => {}
