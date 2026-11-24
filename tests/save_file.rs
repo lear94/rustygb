@@ -50,7 +50,8 @@ fn store_replaces_and_leaves_no_temp() {
 fn store_failure_keeps_previous_save() {
     let dir = Sandbox::new("failure");
     dir.save().store(&[7]).expect("writable dir");
-    fs::create_dir(dir.0.join("game.sav.tmp")).expect("blocks the temp file");
+    fs::create_dir(dir.0.join(format!("game.sav.{}.tmp", std::process::id())))
+        .expect("blocks the temp file");
     assert!(matches!(dir.save().store(&[8]), Err(SaveError::Io { .. })));
     assert_eq!(dir.save().load().expect("readable"), Some(vec![7]));
 }
@@ -60,4 +61,27 @@ fn load_unreadable_is_an_error() {
     let dir = Sandbox::new("unreadable");
     fs::create_dir(dir.0.join("game.sav")).expect("a directory cannot be read");
     assert!(matches!(dir.save().load(), Err(SaveError::Io { .. })));
+}
+
+#[test]
+fn store_read_only_save_is_refused() {
+    let dir = Sandbox::new("readonly");
+    dir.save().store(&[7]).expect("writable dir");
+    let path = dir.0.join("game.sav");
+    let mut permissions = fs::metadata(&path).expect("exists").permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).expect("owned file");
+    assert!(dir.save().store(&[8]).is_err());
+    assert_eq!(dir.save().load().expect("readable"), Some(vec![7]));
+}
+
+#[cfg(unix)]
+#[test]
+fn store_through_link_updates_target() {
+    let dir = Sandbox::new("link");
+    let target = dir.0.join("cloud.bin");
+    fs::write(&target, [1]).expect("writable dir");
+    std::os::unix::fs::symlink(&target, dir.0.join("game.sav")).expect("unix");
+    dir.save().store(&[2]).expect("writable dir");
+    assert_eq!(fs::read(&target).expect("readable"), [2]);
 }

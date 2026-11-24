@@ -58,13 +58,15 @@ impl SaveFile {
     /// # Errors
     /// [`SaveError::RomIsSave`] - `rom_path` already ends in `.sav`.
     pub fn for_rom(rom_path: &Path) -> Result<Self, SaveError> {
-        let path = rom_path.with_extension(SAVE_EXTENSION);
         let is_save = rom_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case(SAVE_EXTENSION));
         if is_save {
             return Err(SaveError::RomIsSave(rom_path.to_path_buf()));
         }
+        let path = rom_path.with_extension(SAVE_EXTENSION);
+        // Through a link, the rename would replace the link and not the save it names.
+        let path = fs::canonicalize(&path).unwrap_or(path);
         Ok(Self { path })
     }
 
@@ -95,13 +97,25 @@ impl SaveFile {
     }
 
     fn replace(&self, image: &[u8]) -> io::Result<()> {
-        let mut temp_path = OsString::from(&self.path);
-        temp_path.push(TEMP_SUFFIX);
-        let mut temp = File::create(&temp_path)?;
-        temp.write_all(image)?;
-        // Without the sync, the rename may reach disk before the data does.
-        temp.sync_all()?;
-        fs::rename(&temp_path, &self.path)
+        if fs::metadata(&self.path).is_ok_and(|save| save.permissions().readonly()) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let temp_path = self.temp_path();
+        let stored = write_synced(&temp_path, image)
+            .and_then(|()| fs::rename(&temp_path, &self.path))
+            .and_then(|()| sync_parent(&self.path));
+        if stored.is_err() {
+            // Best effort: the temp may not exist, and the store error matters more.
+            let _ = fs::remove_file(&temp_path);
+        }
+        stored
+    }
+
+    /// Distinct per process, so concurrent instances never share a file.
+    fn temp_path(&self) -> PathBuf {
+        let mut path = OsString::from(&self.path);
+        path.push(format!(".{}{TEMP_SUFFIX}", std::process::id()));
+        PathBuf::from(path)
     }
 
     fn io_error(&self, source: io::Error) -> SaveError {
@@ -109,6 +123,34 @@ impl SaveFile {
             path: self.path.clone(),
             source,
         }
+    }
+}
+
+fn write_synced(path: &Path, image: &[u8]) -> io::Result<()> {
+    // A crashed process with this id may have left its temp behind. Removing it and
+    // creating anew never follows a link planted there.
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = File::create_new(path)?;
+    file.write_all(image)?;
+    // Without the sync, the rename may reach disk before the data does.
+    file.sync_all()
+}
+
+/// Makes a rename durable; Windows does so itself and cannot open directories.
+fn sync_parent(path: &Path) -> io::Result<()> {
+    match path.parent() {
+        Some(parent) if cfg!(unix) => {
+            let dir = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
+            File::open(dir)?.sync_all()
+        }
+        _ => Ok(()),
     }
 }
 

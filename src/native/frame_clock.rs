@@ -1,9 +1,11 @@
 //! Frame pacing at the DMG refresh rate.
 
+use rusty_gb::{CLOCK_HZ, CYCLES_PER_FRAME};
 use std::time::{Duration, Instant};
 
-/// 70 224 T-cycles at 4 194 304 Hz.
-const FRAME_PERIOD: Duration = Duration::from_nanos(16_742_706);
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
+const FRAME_PERIOD: Duration =
+    Duration::from_nanos(CYCLES_PER_FRAME as u64 * NANOS_PER_SECOND / CLOCK_HZ as u64);
 /// Lag beyond which time is dropped instead of replayed as a burst of frames.
 const MAX_LAG: Duration = Duration::from_millis(100);
 

@@ -23,8 +23,6 @@ bench = false
 pixels = "0.13.0"
 # Window and event loop; the version `pixels` 0.13 shares raw-window-handle with.
 winit = "0.28.7"
-# Keyboard state tracking on top of winit events.
-winit_input_helper = "0.14.0"
 # Cross-platform audio output.
 cpal = "0.15.2"
 # Lock-free bounded channel: the audio callback must not block.

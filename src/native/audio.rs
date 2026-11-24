@@ -9,8 +9,10 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use rusty_gb::GameBoy;
 use std::error::Error;
 
-/// Bridge capacity: ~85 ms at 48 kHz, enough for jitter without audible latency.
-const BRIDGE_CAPACITY_SAMPLES: usize = 4096;
+/// Bridge capacity as a fraction of a second (125 ms), the latency bound.
+const BRIDGE_FRACTION: u32 = 8;
+/// Silence queued after running dry (~31 ms), so one late frame is not one more gap.
+const PREFILL_FRACTION: u32 = 32;
 const SCRATCH_LEN_SAMPLES: usize = 1024;
 
 pub(super) struct AudioOutput {
@@ -18,6 +20,7 @@ pub(super) struct AudioOutput {
     _stream: Stream,
     sender: Sender<f32>,
     sample_rate_hz: u32,
+    prefill_samples: u32,
     scratch: [f32; SCRATCH_LEN_SAMPLES],
 }
 
@@ -28,7 +31,8 @@ impl AudioOutput {
             .ok_or("no output device")?;
         let supported = device.default_output_config()?;
         let config = supported.config();
-        let (sender, receiver) = bounded(BRIDGE_CAPACITY_SAMPLES);
+        let sample_rate_hz = config.sample_rate.0;
+        let (sender, receiver) = bounded(usize::try_from(sample_rate_hz / BRIDGE_FRACTION)?);
         let stream = match supported.sample_format() {
             SampleFormat::F32 => build_stream::<f32>(&device, &config, receiver),
             SampleFormat::I16 => build_stream::<i16>(&device, &config, receiver),
@@ -41,7 +45,8 @@ impl AudioOutput {
         Ok(Self {
             _stream: stream,
             sender,
-            sample_rate_hz: config.sample_rate.0,
+            sample_rate_hz,
+            prefill_samples: sample_rate_hz / PREFILL_FRACTION,
             scratch: [0.0; SCRATCH_LEN_SAMPLES],
         })
     }
@@ -52,6 +57,11 @@ impl AudioOutput {
 
     /// Moves every pending core sample to the device, dropping what does not fit.
     pub(super) fn forward(&mut self, gb: &mut GameBoy) {
+        if self.sender.is_empty() {
+            for _ in 0..self.prefill_samples {
+                let _ = self.sender.try_send(0.0);
+            }
+        }
         loop {
             let count = gb.drain_audio(&mut self.scratch);
             for &sample in self.scratch.iter().take(count) {
