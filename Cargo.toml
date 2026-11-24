@@ -24,7 +24,7 @@ pixels = { version = "0.17.2", default-features = false }
 # Window and event loop. Client-side decorations show the title, which reports failures.
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 # Cross-platform audio output.
-cpal = { version = "0.15.2", default-features = false }
+cpal = { version = "0.18.2", default-features = false }
 # Lock-free bounded channel: the audio callback must not block.
 crossbeam-channel = { version = "0.5.8", default-features = false, features = ["std"] }
 

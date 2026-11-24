@@ -4,7 +4,7 @@
 //! blocking and plays silence when it runs dry.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig, StreamError};
+use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rusty_gb::GameBoy;
 use std::error::Error;
@@ -57,7 +57,7 @@ impl AudioOutput {
             .ok_or(AudioError::NoDevice)?;
         let supported = device.default_output_config()?;
         let config = supported.config();
-        let sample_rate_hz = config.sample_rate.0;
+        let sample_rate_hz = config.sample_rate;
         let lost = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = bounded(usize::try_from(sample_rate_hz / BRIDGE_FRACTION)?);
         let stream = match supported.sample_format() {
@@ -148,21 +148,29 @@ fn build_stream<T: SizedSample + FromSample<f32>>(
     config: &StreamConfig,
     receiver: Receiver<f32>,
     lost: &Arc<AtomicBool>,
-) -> Result<Stream, cpal::BuildStreamError> {
+) -> Result<Stream, cpal::Error> {
     let channels = usize::from(config.channels);
     let lost = Arc::clone(lost);
     device.build_output_stream(
-        config,
+        *config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             fill_frames(data, channels, || receiver.try_recv().unwrap_or(0.0));
         },
         move |e| {
             eprintln!("Audio stream error: {e}");
-            if matches!(e, StreamError::DeviceNotAvailable) {
+            if ends_stream(e.kind()) {
                 lost.store(true, Ordering::Relaxed);
             }
         },
         None,
+    )
+}
+
+/// Returns whether only a new stream can restore the sound.
+fn ends_stream(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
     )
 }
 
@@ -213,6 +221,18 @@ mod tests {
             ),
         ] {
             assert_eq!(error.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn ends_stream_transient_errors_do_not() {
+        for (kind, expected) in [
+            (ErrorKind::DeviceNotAvailable, true),
+            (ErrorKind::StreamInvalidated, true),
+            (ErrorKind::Xrun, false),
+            (ErrorKind::DeviceChanged, false),
+        ] {
+            assert_eq!(ends_stream(kind), expected, "{kind:?}");
         }
     }
 
