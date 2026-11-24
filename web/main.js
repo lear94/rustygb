@@ -1,14 +1,16 @@
 // RustyGB WebAssembly front-end.
 //
 // Loads the wasm-pack output from ./pkg, wires keyboard input to the
-// emulator, draws each frame onto a 160x144 canvas and streams APU samples
-// to an AudioWorklet for low-latency playback.
+// emulator, draws each frame onto a 160x144 canvas and plays APU samples
+// through a ScriptProcessorNode.
 
 import init, { WasmGameBoy, WasmButton } from "../pkg/rusty_gb.js";
 
 const SCREEN_WIDTH = 160;
 const SCREEN_HEIGHT = 144;
-const FRAME_INTERVAL_MS = 1000 / 59.73;
+// 70224 T-cycles at 4194304 Hz.
+const FRAME_INTERVAL_MS = (1000 * 70224) / 4194304;
+const MAX_LAG_MS = 100;
 
 const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
@@ -20,7 +22,9 @@ const romInput = document.getElementById("rom-input");
 let gb = null;
 let lastRom = null;
 let running = false;
-let frameTimer = null;
+let frameRequest = null;
+let lastTickMs = 0;
+let pendingMs = 0;
 let audioCtx = null;
 let audioNode = null;
 const SAMPLE_RATE = 48000;
@@ -52,9 +56,7 @@ async function ensureAudio() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: SAMPLE_RATE,
     });
-    // Lightweight script-processor fallback: pull samples from the
-    // emulator on each audio callback. A more sophisticated build could
-    // swap this out for an AudioWorklet.
+    // A worklet cannot reach the emulator, which lives on this thread.
     const bufferSize = 1024;
     audioNode = audioCtx.createScriptProcessor(bufferSize, 0, 1);
     audioNode.onaudioprocess = (event) => {
@@ -88,32 +90,43 @@ function renderFrame() {
     ctx.putImageData(img, 0, 0);
 }
 
-function tick() {
-    if (!gb || !running) {
+function tick(now) {
+    frameRequest = requestAnimationFrame(tick);
+    // Drop time after a stall (e.g. a hidden tab) instead of replaying it.
+    pendingMs = Math.min(pendingMs + now - lastTickMs, MAX_LAG_MS);
+    lastTickMs = now;
+    if (pendingMs < FRAME_INTERVAL_MS) {
         return;
     }
-    gb.run_frame();
+    while (pendingMs >= FRAME_INTERVAL_MS) {
+        pendingMs -= FRAME_INTERVAL_MS;
+        gb.run_frame();
+    }
     renderFrame();
 }
 
 function startLoop() {
-    if (frameTimer !== null) {
+    if (frameRequest !== null) {
         return;
     }
-    frameTimer = setInterval(tick, FRAME_INTERVAL_MS);
+    pendingMs = 0;
+    lastTickMs = performance.now();
+    frameRequest = requestAnimationFrame(tick);
 }
 
 function stopLoop() {
-    if (frameTimer !== null) {
-        clearInterval(frameTimer);
-        frameTimer = null;
+    if (frameRequest !== null) {
+        cancelAnimationFrame(frameRequest);
+        frameRequest = null;
     }
 }
 
 async function loadRom(bytes, name) {
     await ensureAudio();
-    gb?.free?.();
-    gb = new WasmGameBoy(bytes, SAMPLE_RATE);
+    // Build first: a rejected ROM must leave the running game usable.
+    const next = new WasmGameBoy(bytes, SAMPLE_RATE);
+    gb?.free();
+    gb = next;
     lastRom = bytes;
     running = true;
     resetBtn.disabled = false;
@@ -123,39 +136,37 @@ async function loadRom(bytes, name) {
     setStatus(`Playing: ${name}`);
 }
 
-romInput.addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-        return;
-    }
-    const bytes = new Uint8Array(await file.arrayBuffer());
+async function tryLoadRom(bytes, name) {
     try {
-        await loadRom(bytes, file.name);
+        await loadRom(bytes, name);
     } catch (e) {
         setStatus(`Failed to load ROM: ${e}`);
     }
-});
+}
+
+async function tryLoadFile(file) {
+    if (!file) {
+        return;
+    }
+    try {
+        await tryLoadRom(new Uint8Array(await file.arrayBuffer()), file.name);
+    } catch (e) {
+        setStatus(`Failed to read ROM: ${e}`);
+    }
+}
+
+romInput.addEventListener("change", (event) => tryLoadFile(event.target.files?.[0]));
 
 canvas.addEventListener("dragover", (event) => event.preventDefault());
-canvas.addEventListener("drop", async (event) => {
+canvas.addEventListener("drop", (event) => {
     event.preventDefault();
-    const file = event.dataTransfer?.files?.[0];
-    if (!file) {
-        return;
-    }
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    try {
-        await loadRom(bytes, file.name);
-    } catch (e) {
-        setStatus(`Failed to load ROM: ${e}`);
-    }
+    tryLoadFile(event.dataTransfer?.files?.[0]);
 });
 
-resetBtn.addEventListener("click", async () => {
-    if (!lastRom) {
-        return;
+resetBtn.addEventListener("click", () => {
+    if (lastRom) {
+        tryLoadRom(lastRom, "(reset)");
     }
-    await loadRom(lastRom, "(reset)");
 });
 
 pauseBtn.addEventListener("click", () => {

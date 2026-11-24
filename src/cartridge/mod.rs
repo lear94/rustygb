@@ -13,6 +13,10 @@ use mapper::Mapper;
 const OPEN_BUS: u8 = 0xFF;
 const ROM_BANK_SHIFT: u32 = 14;
 const ROM_BANK_MASK: u16 = (1 << ROM_BANK_SHIFT) - 1;
+/// Every cartridge maps at least two ROM banks.
+const MIN_ROM_LEN: usize = 2 << ROM_BANK_SHIFT;
+/// 512 banks, the MBC5 limit and the largest of any supported controller.
+const MAX_ROM_LEN: usize = 512 << ROM_BANK_SHIFT;
 const RAM_BANK_SHIFT: u32 = 13;
 const RAM_BANK_MASK: u16 = (1 << RAM_BANK_SHIFT) - 1;
 /// RTC footers appended by other emulators (32- and 64-bit timestamps).
@@ -38,14 +42,27 @@ impl Cartridge {
     ///
     /// # Errors
     /// * [`CartridgeError::RomTooSmall`] - the image has no full header.
+    /// * [`CartridgeError::RomTooLarge`] - the image exceeds 8 MiB.
     /// * [`CartridgeError::UnsupportedMapper`] - unknown controller in the header.
     /// * [`CartridgeError::UnsupportedRamSize`] - unknown RAM size in the header.
     /// * [`CartridgeError::SaveSizeMismatch`] - the save does not fit the RAM.
     ///
     /// # Complexity
     /// O(rom + ram) time and space.
-    pub fn from_bytes(rom: Vec<u8>, saved_ram: Option<Vec<u8>>) -> Result<Self, CartridgeError> {
+    pub fn from_bytes(
+        mut rom: Vec<u8>,
+        saved_ram: Option<Vec<u8>>,
+    ) -> Result<Self, CartridgeError> {
         let header = Header::parse(&rom)?;
+        if rom.len() > MAX_ROM_LEN {
+            return Err(CartridgeError::RomTooLarge {
+                len: rom.len(),
+                max: MAX_ROM_LEN,
+            });
+        }
+        // Bank decoding masks address lines, so the image must be a power of two;
+        // unpopulated addresses read as open bus.
+        rom.resize(rom.len().next_power_of_two().max(MIN_ROM_LEN), OPEN_BUS);
         let mut cartridge = Self {
             rom,
             ram: vec![0; header.ram_len],
@@ -206,6 +223,33 @@ mod tests {
     fn from_bytes_without_battery_ignores_save() {
         let cart = with_save(MBC5, 1).expect("save is irrelevant");
         assert_eq!(cart.save_image(), None);
+    }
+
+    #[test]
+    fn from_bytes_pads_irregular_images() {
+        for mapper in [0, MBC1_BATTERY, MBC3_RTC, MBC5] {
+            let mut short = rom(mapper, 0, 2);
+            short.truncate(0x150);
+            let cart = Cartridge::from_bytes(short, None).expect("header is present");
+            assert_eq!((cart.read(0x150), cart.read(0x7FFF)), (OPEN_BUS, OPEN_BUS));
+        }
+        let mut cart = Cartridge::from_bytes(rom(MBC5, 0, 6), None).expect("six banks");
+        cart.write(0x2000, 5);
+        assert_eq!(cart.read(0x4000), 5);
+        cart.write(0x2000, 6);
+        assert_eq!(cart.read(0x4000), OPEN_BUS);
+    }
+
+    #[test]
+    fn from_bytes_size_limit_is_inclusive() {
+        assert!(Cartridge::from_bytes(vec![0; MAX_ROM_LEN], None).is_ok());
+        assert_eq!(
+            Cartridge::from_bytes(vec![0; MAX_ROM_LEN + 1], None).err(),
+            Some(CartridgeError::RomTooLarge {
+                len: MAX_ROM_LEN + 1,
+                max: MAX_ROM_LEN
+            })
+        );
     }
 
     #[test]

@@ -14,6 +14,13 @@ pub enum CartridgeError {
         /// Minimum accepted length in bytes.
         min: usize,
     },
+    /// The image exceeds what any supported controller can address.
+    RomTooLarge {
+        /// Image length in bytes.
+        len: usize,
+        /// Maximum accepted length in bytes.
+        max: usize,
+    },
     /// The header names a controller that is not emulated.
     UnsupportedMapper(
         /// Header byte `0x147`.
@@ -39,6 +46,9 @@ impl fmt::Display for CartridgeError {
             Self::RomTooSmall { len, min } => {
                 write!(f, "ROM has {len} bytes, at least {min} required")
             }
+            Self::RomTooLarge { len, max } => {
+                write!(f, "ROM has {len} bytes, at most {max} supported")
+            }
             Self::UnsupportedMapper(code) => write!(f, "unsupported mapper {code:#04X}"),
             Self::UnsupportedRamSize(code) => write!(f, "unsupported RAM size {code:#04X}"),
             Self::SaveSizeMismatch { expected, found } => {
@@ -60,6 +70,10 @@ mod tests {
             (
                 CartridgeError::RomTooSmall { len: 1, min: 2 },
                 "ROM has 1 bytes, at least 2 required",
+            ),
+            (
+                CartridgeError::RomTooLarge { len: 2, max: 1 },
+                "ROM has 2 bytes, at most 1 supported",
             ),
             (
                 CartridgeError::UnsupportedMapper(0xFE),
