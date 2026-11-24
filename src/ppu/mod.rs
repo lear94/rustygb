@@ -103,6 +103,8 @@ pub struct Ppu {
     obp0: u8,
     obp1: u8,
     dots: u16,
+    /// Dot of the next state change on this line.
+    next_event_dot: u16,
     /// WY matched a line of this frame.
     window_triggered: bool,
     /// Lines of the window drawn this frame.
@@ -142,6 +144,7 @@ impl Ppu {
             obp0: 0xFF,
             obp1: 0xFF,
             dots: 0,
+            next_event_dot: MODE_START_DOT,
             window_triggered: false,
             window_line: 0,
             drawing_end_dot: DRAWING_END_DOT,
@@ -168,14 +171,8 @@ impl Ppu {
     pub fn tick(&mut self) -> u8 {
         if self.lcdc & LCDC_ON != 0 {
             self.dots += DOTS_PER_TICK;
-            if self.dots >= DOTS_PER_LINE {
-                self.start_line();
-            } else if self.dots == MODE_START_DOT {
-                self.start_mode();
-            } else if self.line < FIRST_VBLANK_LINE {
-                self.update_visible_mode();
-            } else if self.line == LAST_LINE && self.dots == LAST_LINE_WRAP_DOT {
-                self.compare_lyc(Some(self.ly));
+            if self.dots >= self.next_event_dot {
+                self.handle_event();
             }
         }
         std::mem::take(&mut self.requested)
@@ -297,6 +294,7 @@ impl Ppu {
         if !was_on && is_on {
             self.skip_oam_scan = true;
             self.dots = LCD_ON_FIRST_DOT;
+            self.next_event_dot = self.following_event_dot();
             self.skip_frame = true;
             self.compare_lyc(Some(self.ly));
         }
@@ -311,6 +309,36 @@ impl Ppu {
         self.mode = Mode::HBlank;
         self.update_stat_line();
         self.blank_frame();
+    }
+
+    /// Runs the state change due at this dot and schedules the next one. Most ticks have
+    /// none, which keeps [`Self::tick`] to one comparison.
+    fn handle_event(&mut self) {
+        if self.dots >= DOTS_PER_LINE {
+            self.start_line();
+        } else if self.dots == MODE_START_DOT {
+            self.start_mode();
+        } else if self.line < FIRST_VBLANK_LINE {
+            self.update_visible_mode();
+        } else if self.line == LAST_LINE && self.dots == LAST_LINE_WRAP_DOT {
+            self.compare_lyc(Some(self.ly));
+        }
+        self.next_event_dot = self.following_event_dot();
+    }
+
+    fn following_event_dot(&self) -> u16 {
+        let visible = self.line < FIRST_VBLANK_LINE;
+        if self.dots < MODE_START_DOT {
+            MODE_START_DOT
+        } else if self.line == LAST_LINE && self.dots < LAST_LINE_WRAP_DOT {
+            LAST_LINE_WRAP_DOT
+        } else if visible && self.dots <= OAM_SCAN_LAST_DOT {
+            OAM_SCAN_LAST_DOT + DOTS_PER_TICK
+        } else if visible && self.mode == Mode::Drawing {
+            self.drawing_end_dot
+        } else {
+            DOTS_PER_LINE
+        }
     }
 
     fn start_line(&mut self) {

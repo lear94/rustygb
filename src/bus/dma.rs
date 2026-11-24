@@ -46,6 +46,9 @@ impl OamDma {
 
     /// Advances one M-cycle and returns the byte to copy, if any.
     pub(super) fn tick(&mut self) -> Option<Copy> {
+        if !self.busy && self.start_delay == 0 {
+            return None;
+        }
         if self.start_delay != 0 {
             self.start_delay -= 1;
             if self.start_delay == 0 {

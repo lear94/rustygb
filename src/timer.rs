@@ -45,6 +45,8 @@ pub struct Timer {
     tima: u8,
     tma: u8,
     tac: u8,
+    /// Divider bits whose falling edge has an effect.
+    watched_bits: u16,
     phase: Phase,
     /// Edges not reported yet, e.g. caused by a DIV write.
     pending: TimerTick,
@@ -59,6 +61,7 @@ impl Timer {
             tima: 0,
             tma: 0,
             tac: 0,
+            watched_bits: watched_bits(0),
             phase: Phase::Counting,
             pending: TimerTick::default(),
         }
@@ -68,6 +71,16 @@ impl Timer {
     ///
     /// The fastest rate has a 16 T-cycle period, so one M-cycle holds at most one edge.
     pub fn tick(&mut self) -> TimerTick {
+        let divider = self.divider.wrapping_add(T_CYCLES_PER_TICK);
+        let fallen = self.divider & !divider;
+        // Nearly every tick is idle; this costs one branch instead of the full update.
+        if fallen & self.watched_bits == 0
+            && self.phase == Phase::Counting
+            && self.pending == TimerTick::default()
+        {
+            self.divider = divider;
+            return TimerTick::default();
+        }
         let reload = self.phase == Phase::Overflowed;
         if reload {
             self.tima = self.tma;
@@ -75,7 +88,7 @@ impl Timer {
         } else {
             self.phase = Phase::Counting;
         }
-        self.change_input(self.divider.wrapping_add(T_CYCLES_PER_TICK), self.tac);
+        self.change_input(divider, self.tac);
         self.pending.interrupt = reload;
         std::mem::take(&mut self.pending)
     }
@@ -125,6 +138,7 @@ impl Timer {
         self.pending.serial_clock |= fallen & SERIAL_CLOCK_BIT != 0;
         self.divider = divider;
         self.tac = tac;
+        self.watched_bits = watched_bits(tac);
         if before && !input_level(divider, tac) {
             let (tima, overflowed) = self.tima.overflowing_add(1);
             self.tima = tima;
@@ -141,14 +155,22 @@ impl Default for Timer {
     }
 }
 
+fn watched_bits(tac: u8) -> u16 {
+    AUDIO_CLOCK_BIT | SERIAL_CLOCK_BIT | rate_bit(tac)
+}
+
 fn input_level(divider: u16, tac: u8) -> bool {
-    let bit = match tac & TAC_RATE_MASK {
+    tac & TAC_ENABLE != 0 && divider & rate_bit(tac) != 0
+}
+
+/// Divider bit counted by TIMA.
+fn rate_bit(tac: u8) -> u16 {
+    match tac & TAC_RATE_MASK {
         0 => TIMA_4096_HZ_BIT,
         1 => TIMA_262144_HZ_BIT,
         2 => TIMA_65536_HZ_BIT,
         _ => TIMA_16384_HZ_BIT,
-    };
-    tac & TAC_ENABLE != 0 && divider & bit != 0
+    }
 }
 
 #[cfg(test)]
