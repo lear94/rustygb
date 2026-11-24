@@ -71,6 +71,7 @@ impl Motherboard {
 
     /// Advances every peripheral by one M-cycle.
     pub fn tick(&mut self) {
+        self.cartridge.tick();
         if self.timer.tick() {
             self.if_reg |= IRQ_TIMER;
         }

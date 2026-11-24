@@ -4,6 +4,7 @@ use rusty_gb::save::SaveFile;
 use rusty_gb::GameBoy;
 use std::error::Error;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Frames between autosave checks (~10 s): bounds the progress a crash can lose.
 const AUTOSAVE_PERIOD_FRAMES: u32 = 600;
@@ -20,7 +21,8 @@ impl Session {
         let rom = std::fs::read(path)?;
         // An unreadable or foreign save must abort the load: continuing with blank RAM
         // would overwrite it.
-        let gb = GameBoy::from_rom_with_save(rom, save.load()?, sample_rate_hz)?;
+        let mut gb = GameBoy::from_rom_with_save(rom, save.load()?, sample_rate_hz)?;
+        gb.cartridge().sync_clock(unix_now_s());
         Ok(Self {
             gb,
             save,
@@ -43,7 +45,7 @@ impl Session {
         if !cartridge.needs_save() {
             return true;
         }
-        let Some(image) = cartridge.save_image() else {
+        let Some(image) = cartridge.save_image(unix_now_s()) else {
             return true;
         };
         if let Err(e) = self.save.store(&image) {
@@ -53,4 +55,11 @@ impl Session {
         cartridge.mark_saved();
         true
     }
+}
+
+/// Wall-clock time; a clock set before 1970 counts as the epoch.
+fn unix_now_s() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
