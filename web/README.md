@@ -45,8 +45,7 @@ Then open <http://localhost:8000/web/>, click **Load ROM**, and pick a
 
 ## Notes
 
-* Battery saves are kept in `localStorage`, per game, every few seconds and when
+* Battery saves are kept in `localStorage`, per ROM image, every few seconds and when
   the page closes. Clearing site data deletes them.
-* The current audio path uses `ScriptProcessorNode` for portability.
-  Switching to an `AudioWorklet` would shave a few milliseconds of latency
-  on modern browsers.
+* The current audio path uses `ScriptProcessorNode` because an `AudioWorklet`
+  cannot reach the emulator, which runs on the main thread.

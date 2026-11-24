@@ -31,7 +31,8 @@ This project is a **clean-room implementation** created solely for **educational
 ### Accuracy
 Passes every DMG ROM of the mooneye `acceptance` and `emulator-only` sets, blargg
 `cpu_instrs`, `instr_timing`, `mem_timing`, `halt_bug` and `dmg_sound`, `rtc3test`, and
-`dmg-acid2` (run by hand; the ROMs are not in this repository).
+`dmg-acid2`; gbmicrotest passes 422 of 513 (run by hand; the ROMs are not in this
+repository).
 Not modelled: mid-line register changes, the DMG OAM bug, DMA bus conflicts, the window's
 share of mode 3 length, the link cable and Game Boy Color features.
 
@@ -104,10 +105,14 @@ src/
 ├── apu/          Audio Processing Unit
 ├── cartridge/    ROM-only / MBC1 / MBC2 / MBC3 / MBC5 mappers
 ├── hardware.rs   Constants shared by every component
+├── memory_map.rs Region bounds and I/O register addresses
 ├── save.rs       Crash-safe save files
 ├── serial.rs     Serial port (no link partner)
 ├── joypad.rs     Backend-agnostic joypad
 └── timer.rs      DIV/TIMA/TMA/TAC
+benches/          Frame benchmarks
+scripts/          Benchmark gate and Linux window smoke test
+tests/            Fuzzing, allocation and save-file tests
 wasm/             wasm-bindgen JS bindings
 web/              Browser front-end for the WebAssembly build
 ```
