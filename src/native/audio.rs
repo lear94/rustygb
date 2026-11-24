@@ -8,6 +8,7 @@ use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig, 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rusty_gb::GameBoy;
 use std::error::Error;
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -17,6 +18,27 @@ const BRIDGE_FRACTION: u32 = 8;
 /// up to 16 ms late.
 const PREFILL_FRACTION: u32 = 16;
 const SCRATCH_LEN_SAMPLES: usize = 1024;
+
+/// Output configuration this front-end cannot use.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub(super) enum AudioError {
+    /// The host has no default output.
+    NoDevice,
+    /// The device wants samples in a format not converted here.
+    UnsupportedFormat(SampleFormat),
+}
+
+impl fmt::Display for AudioError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoDevice => write!(f, "no output device"),
+            Self::UnsupportedFormat(format) => write!(f, "unsupported sample format {format}"),
+        }
+    }
+}
+
+impl Error for AudioError {}
 
 pub(super) struct AudioOutput {
     /// Playback stops when the stream is dropped.
@@ -32,7 +54,7 @@ impl AudioOutput {
     pub(super) fn open() -> Result<Self, Box<dyn Error>> {
         let device = cpal::default_host()
             .default_output_device()
-            .ok_or("no output device")?;
+            .ok_or(AudioError::NoDevice)?;
         let supported = device.default_output_config()?;
         let config = supported.config();
         let sample_rate_hz = config.sample_rate.0;
@@ -44,7 +66,7 @@ impl AudioOutput {
             SampleFormat::U16 => build_stream::<u16>(&device, &config, receiver, &lost),
             SampleFormat::I32 => build_stream::<i32>(&device, &config, receiver, &lost),
             SampleFormat::U8 => build_stream::<u8>(&device, &config, receiver, &lost),
-            other => return Err(format!("unsupported sample format {other}").into()),
+            other => return Err(AudioError::UnsupportedFormat(other).into()),
         }?;
         stream.play()?;
         Ok(Self {
@@ -178,6 +200,19 @@ mod tests {
                 filled(channels).map(f32::to_bits),
                 expected.map(f32::to_bits)
             );
+        }
+    }
+
+    #[test]
+    fn display_names_the_cause() {
+        for (error, text) in [
+            (AudioError::NoDevice, "no output device"),
+            (
+                AudioError::UnsupportedFormat(SampleFormat::F64),
+                "unsupported sample format f64",
+            ),
+        ] {
+            assert_eq!(error.to_string(), text);
         }
     }
 
