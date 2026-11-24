@@ -19,6 +19,10 @@ const T_CYCLES_PER_PERIOD_UNIT: u16 = 2;
 const TRIGGER_DELAY_T_CYCLES: u16 = 6;
 /// Largest 4-bit sample.
 const SAMPLE_MAX: i16 = 15;
+const SCALE_QUARTER: i16 = 1;
+const SCALE_HALF: i16 = 2;
+const SCALE_FULL: i16 = 4;
+const _: () = assert!(SAMPLE_MAX * SCALE_FULL == super::FULL_SCALE);
 
 #[derive(Debug)]
 pub(super) struct Wave {
@@ -156,9 +160,9 @@ impl Wave {
         }
         let scale = match self.volume_code {
             0 => 0,
-            1 => 4,
-            2 => 2,
-            _ => 1,
+            1 => SCALE_FULL,
+            2 => SCALE_HALF,
+            _ => SCALE_QUARTER,
         };
         // Twice the sample minus its maximum: centred on zero.
         (i16::from(self.current) * 2 - SAMPLE_MAX) * scale

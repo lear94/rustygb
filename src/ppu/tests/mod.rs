@@ -268,3 +268,14 @@ fn tick_oam_source_leads_mode_except_on_line_0() {
         assert_eq!(requests(&mut ppu, 1, IRQ_STAT), 1, "line {lines}");
     }
 }
+
+#[test]
+fn write_lcdc_off_during_oam_pulse_ends_it() {
+    let mut ppu = line_0();
+    ppu.write(LYC, 200);
+    requests(&mut ppu, TICKS_PER_LINE, 0);
+    assert!(ppu.oam_pulse);
+    ppu.write(LCDC, 0);
+    ppu.write(STAT, STAT_OAM_SOURCE);
+    assert_eq!(requests(&mut ppu, 10, IRQ_STAT), 0);
+}

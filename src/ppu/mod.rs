@@ -213,6 +213,7 @@ impl Ppu {
         self.window_line = 0;
         self.window_triggered = false;
         self.mode = Mode::HBlank;
+        self.oam_pulse = false;
         self.update_stat_line();
         self.blank_frame();
     }

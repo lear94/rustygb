@@ -29,9 +29,11 @@ const MAX_BUFFERED_SAMPLES: usize = 8192;
 const FULL_SCALE: i16 = 60;
 /// Two sides with volumes 1-8 each.
 const MAX_GAIN: i16 = 16;
+const CHANNELS: i16 = 4;
 const CHANNEL_COUNT: usize = 4;
+const _: () = assert!(CHANNELS as usize == CHANNEL_COUNT);
 /// Full-scale channels at full gain.
-const MIX_FULL_SCALE: i16 = FULL_SCALE * MAX_GAIN * 4;
+const MIX_FULL_SCALE: i16 = FULL_SCALE * MAX_GAIN * CHANNELS;
 
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
@@ -72,6 +74,15 @@ struct Control {
     between_clocks: bool,
 }
 
+/// Sequencer start-up: powering on halfway through a clock period swallows its edge, and
+/// until the next one lengths behave as if step 0 were already done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PowerOn {
+    Settled,
+    SkipClock,
+    Skipped,
+}
+
 /// Audio processing unit.
 #[derive(Debug)]
 pub struct Apu {
@@ -83,7 +94,7 @@ pub struct Apu {
     powered: bool,
     /// Next sequencer step.
     sequencer_step: u8,
-    skip_clock: bool,
+    power_on: PowerOn,
     sample_rate_hz: u32,
     /// Fractional sample position, in units of 1 / [`M_CYCLES_PER_SECOND`].
     sample_phase: u32,
@@ -111,7 +122,7 @@ impl Apu {
             registers: [0; REGISTER_COUNT],
             powered: true,
             sequencer_step: 0,
-            skip_clock: false,
+            power_on: PowerOn::Settled,
             sample_rate_hz: capped_rate(sample_rate_hz),
             sample_phase: 0,
             channel_gains: [0; CHANNEL_COUNT],
@@ -292,8 +303,11 @@ impl Apu {
         }
         if !self.powered && powered {
             self.sequencer_step = 0;
-            // Powering on halfway through a period swallows its edge.
-            self.skip_clock = clock_high;
+            self.power_on = if clock_high {
+                PowerOn::SkipClock
+            } else {
+                PowerOn::Settled
+            };
         }
         self.powered = powered;
     }
@@ -303,7 +317,7 @@ impl Apu {
             frequency_high: val & FREQUENCY_HIGH_MASK,
             length_enabled: val & LENGTH_ENABLE != 0,
             trigger: val & TRIGGER != 0,
-            between_clocks: self.sequencer_step & 1 != 0,
+            between_clocks: self.sequencer_step & 1 != 0 || self.power_on != PowerOn::Settled,
         }
     }
 
@@ -323,9 +337,11 @@ impl Apu {
     }
 
     fn clock_sequencer(&mut self) {
-        if std::mem::take(&mut self.skip_clock) {
+        if self.power_on == PowerOn::SkipClock {
+            self.power_on = PowerOn::Skipped;
             return;
         }
+        self.power_on = PowerOn::Settled;
         let step = self.sequencer_step;
         self.sequencer_step = (step + 1) & SEQUENCER_STEP_MASK;
         if step & 1 == 0 {

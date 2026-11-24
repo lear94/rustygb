@@ -193,17 +193,19 @@ fn write_power_off_stops_every_channel() {
 }
 
 #[test]
-fn write_power_on_mid_period_skips_first_clock() {
-    let mut apu = apu();
-    apu.write(NR52, 0, false);
-    apu.write(0xFF16, 0x3F, false);
-    apu.write(NR52, 0x80, true);
-    apu.write(0xFF17, 0xF0, false);
-    apu.write(0xFF19, 0xC0, false);
-    tick(&mut apu, SEQUENCER_PERIOD_TICKS);
-    assert_eq!(apu.read(NR52), 0xF2);
-    tick(&mut apu, SEQUENCER_PERIOD_TICKS);
-    assert_eq!(apu.read(NR52), 0xF0);
+fn write_power_on_clock_phase_sets_length_timing() {
+    for (clock_high, edges) in [(false, 3), (true, 2)] {
+        let mut apu = apu();
+        apu.write(NR52, 0, false);
+        apu.write(0xFF16, 0x3E, false);
+        apu.write(NR52, 0x80, clock_high);
+        apu.write(0xFF17, 0xF0, false);
+        apu.write(0xFF19, 0xC0, false);
+        tick(&mut apu, SEQUENCER_PERIOD_TICKS * (edges - 1));
+        assert_eq!(apu.read(NR52), 0xF2, "{clock_high}");
+        tick(&mut apu, SEQUENCER_PERIOD_TICKS);
+        assert_eq!(apu.read(NR52), 0xF0, "{clock_high}");
+    }
 }
 
 #[test]
