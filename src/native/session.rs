@@ -1,5 +1,6 @@
 //! Running game together with the file that keeps its battery RAM.
 
+use super::report::report;
 use rusty_gb::save::SaveFile;
 use rusty_gb::GameBoy;
 use std::error::Error;
@@ -49,7 +50,7 @@ impl Session {
             return true;
         };
         if let Err(e) = self.save.store(&image) {
-            eprintln!("Failed to save game: {e}");
+            report(format_args!("Failed to save game: {e}"));
             return false;
         }
         cartridge.mark_saved();

@@ -1,6 +1,7 @@
 //! Arbitrary cartridges, saves, code and bus traffic must never panic.
 //!
-//! The seed is fixed for reproducibility; set `PROPTEST_CASES` for a longer campaign.
+//! The seed is fixed for reproducibility; set `PROPTEST_CASES` for a longer
+//! campaign and `FUZZ_SEED` to explore other inputs.
 
 #![allow(
     clippy::indexing_slicing,
@@ -54,9 +55,10 @@ fn save() -> impl Strategy<Value = Option<Vec<u8>>> {
 }
 
 fn config(cases: u32) -> Config {
+    let seed = std::env::var("FUZZ_SEED").ok();
     let requested = std::env::var("PROPTEST_CASES").ok();
     Config {
-        rng_seed: RngSeed::Fixed(0),
+        rng_seed: RngSeed::Fixed(seed.and_then(|text| text.parse().ok()).unwrap_or(0)),
         failure_persistence: None,
         cases: requested
             .and_then(|text| text.parse().ok())

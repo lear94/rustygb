@@ -50,7 +50,7 @@ fn store_replaces_and_leaves_no_temp() {
 fn store_failure_keeps_previous_save() {
     let dir = Sandbox::new("failure");
     dir.save().store(&[7]).expect("writable dir");
-    fs::create_dir(dir.0.join(format!("game.sav.{}.tmp", std::process::id())))
+    fs::create_dir(dir.0.join(format!(".rustygb-{}.tmp", std::process::id())))
         .expect("blocks the temp file");
     assert!(matches!(dir.save().store(&[8]), Err(SaveError::Io { .. })));
     assert_eq!(dir.save().load().expect("readable"), Some(vec![7]));
@@ -84,4 +84,39 @@ fn store_through_link_updates_target() {
     std::os::unix::fs::symlink(&target, dir.0.join("game.sav")).expect("unix");
     dir.save().store(&[2]).expect("writable dir");
     assert_eq!(fs::read(&target).expect("readable"), [2]);
+}
+
+#[cfg(unix)]
+#[test]
+fn for_rom_dangling_link_is_an_error() {
+    let dir = Sandbox::new("dangling");
+    std::os::unix::fs::symlink(dir.0.join("gone"), dir.0.join("game.sav")).expect("unix");
+    assert!(matches!(
+        SaveFile::for_rom(&dir.0.join("game.gb")),
+        Err(SaveError::Io { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn store_keeps_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new("mode");
+    dir.save().store(&[1]).expect("writable dir");
+    let path = dir.0.join("game.sav");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("owned");
+    dir.save().store(&[2]).expect("writable dir");
+    let mode = fs::metadata(&path).expect("exists").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn store_longest_name_succeeds() {
+    let dir = Sandbox::new("long");
+    let rom = dir.0.join(format!("{}.gb", "a".repeat(246)));
+    let save = SaveFile::for_rom(&rom).expect("not a save");
+    if cfg!(unix) {
+        save.store(&[1]).expect("255-byte names are valid");
+        assert_eq!(save.load().expect("readable"), Some(vec![1]));
+    }
 }

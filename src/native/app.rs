@@ -1,9 +1,11 @@
 //! Application state and its reaction to window events.
 
 use super::audio::AudioOutput;
+use super::discard::{Action, Discard};
 use super::display::Display;
 use super::frame_clock::FrameClock;
 use super::keys::Keys;
+use super::report::report;
 use super::session::Session;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -34,17 +36,16 @@ pub(super) struct App {
     audio_retry: Option<Instant>,
     session: Option<Session>,
     clock: FrameClock,
-    /// The user was told that repeating the action loses progress.
-    discard_armed: bool,
-    /// Progress was knowingly lost on exit.
-    discarded: bool,
+    discard: Discard,
+    /// The last exit attempt could not save.
+    unsaved: bool,
     failure: Option<Box<dyn Error>>,
 }
 
 impl App {
     pub(super) fn new(initial_rom: Option<PathBuf>) -> Self {
         let audio = AudioOutput::open()
-            .inspect_err(|e| eprintln!("Running without audio: {e}"))
+            .inspect_err(|e| report(format_args!("Running without audio: {e}")))
             .ok();
         Self {
             initial_rom,
@@ -55,17 +56,24 @@ impl App {
             audio_retry: None,
             session: None,
             clock: FrameClock::new(Instant::now()),
-            discard_armed: false,
-            discarded: false,
+            discard: Discard::default(),
+            unsaved: false,
             failure: None,
         }
     }
 
-    /// Outcome once the event loop has ended.
-    pub(super) fn into_result(self) -> Result<ExitCode, Box<dyn Error>> {
-        match self.failure {
+    /// Outcome once the event loop has ended, possibly with an error of its own.
+    pub(super) fn into_result(
+        self,
+        loop_error: Option<Box<dyn Error>>,
+    ) -> Result<ExitCode, Box<dyn Error>> {
+        match self.failure.or(loop_error) {
+            Some(error) if self.unsaved => {
+                report(format_args!("RustyGB: {error}"));
+                Ok(ExitCode::from(EXIT_UNSAVED))
+            }
             Some(error) => Err(error),
-            None if self.discarded => Ok(ExitCode::from(EXIT_UNSAVED)),
+            None if self.unsaved => Ok(ExitCode::from(EXIT_UNSAVED)),
             None => Ok(ExitCode::SUCCESS),
         }
     }
@@ -83,10 +91,7 @@ impl App {
     }
 
     fn close(&mut self, event_loop: &ActiveEventLoop) {
-        if self.persist() {
-            event_loop.exit();
-        } else if self.discard_confirmed("close") {
-            self.discarded = true;
+        if self.persist() || self.discard_confirmed(Action::Close) {
             event_loop.exit();
         }
     }
@@ -95,24 +100,29 @@ impl App {
     fn persist(&mut self) -> bool {
         let saved = self.session.as_mut().is_none_or(Session::persist);
         if saved {
-            self.discard_armed = false;
+            self.discard.reset();
         }
         saved
     }
 
     /// Asks once, through the title, to repeat `action` before losing progress.
-    fn discard_confirmed(&mut self, action: &str) -> bool {
-        self.set_title(&format!("SAVE FAILED: {action} again to lose progress"));
-        std::mem::replace(&mut self.discard_armed, true)
+    fn discard_confirmed(&mut self, action: Action) -> bool {
+        let verb = match action {
+            Action::Close => "close",
+            Action::Drop => "drop",
+        };
+        self.set_title(&format!("SAVE FAILED: {verb} again to lose progress"));
+        self.discard.confirm(action, Instant::now())
     }
 
-    fn handle_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
+    /// Handles a key; focusing the window synthesizes a press of every held key.
+    fn handle_key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent, synthetic: bool) {
         let PhysicalKey::Code(code) = event.physical_key else {
             return;
         };
         let pressed = event.state == ElementState::Pressed;
         // A held Escape must not confirm its own warning.
-        if code == KeyCode::Escape && pressed && !event.repeat {
+        if code == KeyCode::Escape && pressed && !event.repeat && !synthetic {
             self.close(event_loop);
         }
         self.keys.update(code, pressed);
@@ -124,7 +134,7 @@ impl App {
             return;
         };
         if let Err(e) = display.render(frame) {
-            self.fail(event_loop, e.into());
+            self.fail(event_loop, e);
         }
     }
 
@@ -176,7 +186,7 @@ impl App {
     /// confirmed) or the new one cannot be opened. Saving comes first: the same ROM may be
     /// reopened.
     fn open_rom(&mut self, path: &Path) {
-        if !self.persist() && !self.discard_confirmed("drop") {
+        if !self.persist() && !self.discard_confirmed(Action::Drop) {
             return;
         }
         let sample_rate_hz = self
@@ -186,12 +196,12 @@ impl App {
         match Session::open(path, sample_rate_hz) {
             Ok(session) => {
                 self.session = Some(session);
-                self.discard_armed = false;
+                self.discard.reset();
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 self.set_title(&name);
             }
             Err(e) => {
-                eprintln!("Failed to load {}: {e}", path.display());
+                report(format_args!("Failed to load {}: {e}", path.display()));
                 self.set_title(&e.to_string());
             }
         }
@@ -217,7 +227,11 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => self.close(event_loop),
             WindowEvent::DroppedFile(path) => self.open_rom(&path),
             WindowEvent::Focused(false) => self.keys.release_all(),
-            WindowEvent::KeyboardInput { event, .. } => self.handle_key(event_loop, &event),
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => self.handle_key(event_loop, &event, is_synthetic),
             WindowEvent::RedrawRequested => self.render(event_loop),
             WindowEvent::Resized(size) => {
                 if let Some(display) = &mut self.display {
@@ -236,6 +250,6 @@ impl ApplicationHandler for App {
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
         // Not every exit goes through `close`: rendering may fail.
-        self.persist();
+        self.unsaved = !self.persist();
     }
 }

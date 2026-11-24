@@ -21,6 +21,8 @@ const romInput = document.getElementById("rom-input");
 
 let gb = null;
 let lastRom = null;
+// What storage held when this tab last read or wrote it.
+let storedText = null;
 let lastName = "";
 let loadSequence = 0;
 let running = false;
@@ -94,14 +96,32 @@ function playSamples(out) {
     out.set(gb.drain_audio(out.length));
 }
 
-// Title, cartridge type and checksums: enough to tell games apart.
-function saveKey(rom) {
+// Title, cartridge type and checksums. Hacks often keep them, so this alone is not a key.
+function headerKey(rom) {
     const header = Array.from(rom.subarray(0x134, 0x150));
     return "rustygb:" + header.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function loadSave(rom) {
-    const text = localStorage.getItem(saveKey(rom));
+// FNV-1a over the whole image; not cryptographic, only to tell ROMs apart.
+function saveKey(rom) {
+    let hash = 0x811c9dc5;
+    for (const byte of rom) {
+        hash = Math.imul(hash ^ byte, 0x01000193);
+    }
+    return `${headerKey(rom)}:${rom.length}:${(hash >>> 0).toString(16)}`;
+}
+
+// Text stored for a ROM, or null. Blocked storage must not stop the game.
+function readStored(rom) {
+    try {
+        return localStorage.getItem(saveKey(rom)) ?? localStorage.getItem(headerKey(rom));
+    } catch (e) {
+        console.warn("Saves unavailable:", e);
+        return null;
+    }
+}
+
+function decodeSave(text) {
     return text === null ? undefined : Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 }
 
@@ -112,10 +132,14 @@ function persist() {
     }
     const image = gb.save_image(unixNow());
     try {
-        const text = Array.from(image, (b) => String.fromCharCode(b)).join("");
-        localStorage.setItem(saveKey(lastRom), btoa(text));
+        if (readStored(lastRom) !== storedText) {
+            throw new Error("another tab saved this game");
+        }
+        const text = btoa(Array.from(image, (b) => String.fromCharCode(b)).join(""));
+        localStorage.setItem(saveKey(lastRom), text);
+        storedText = text;
     } catch (e) {
-        setStatus(`SAVE FAILED: ${e}`);
+        setStatus(`SAVE FAILED: ${e.message ?? e}`);
         return false;
     }
     gb.mark_saved();
@@ -173,10 +197,12 @@ function loadRom(bytes, name) {
         return;
     }
     // Build first: a rejected ROM must leave the running game usable.
-    const next = new WasmGameBoy(bytes, loadSave(bytes), SAMPLE_RATE, unixNow());
+    const stored = readStored(bytes);
+    const next = new WasmGameBoy(bytes, decodeSave(stored), SAMPLE_RATE, unixNow());
     gb?.free();
     gb = next;
     lastRom = bytes;
+    storedText = stored;
     lastName = name;
     running = true;
     resetBtn.disabled = false;
@@ -212,6 +238,7 @@ async function tryLoadFile(file) {
 }
 
 romInput.addEventListener("change", () => {
+    romInput.blur();
     tryLoadFile(romInput.files?.[0]);
     // Otherwise choosing the same file again fires no event.
     romInput.value = "";
@@ -225,12 +252,14 @@ window.addEventListener("drop", (event) => {
 });
 
 resetBtn.addEventListener("click", () => {
+    resetBtn.blur();
     if (lastRom) {
         tryLoadRom(lastRom, lastName);
     }
 });
 
 pauseBtn.addEventListener("click", () => {
+    pauseBtn.blur();
     if (!gb) {
         return;
     }
@@ -246,6 +275,10 @@ pauseBtn.addEventListener("click", () => {
 function setKey(event, pressed) {
     const btn = KEY_MAP[event.code];
     if (btn === undefined || !gb) {
+        return;
+    }
+    // Enter and Space belong to a focused control.
+    if (pressed && event.target instanceof Element && event.target.closest("button, input")) {
         return;
     }
     if (pressed && (event.ctrlKey || event.metaKey || event.altKey)) {
@@ -275,6 +308,11 @@ window.addEventListener("pointerdown", () => {
 });
 window.addEventListener("blur", releaseAllKeys);
 window.addEventListener("pagehide", persist);
+window.addEventListener("beforeunload", (event) => {
+    if (!persist()) {
+        event.preventDefault();
+    }
+});
 document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
         releaseAllKeys();

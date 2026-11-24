@@ -2,9 +2,11 @@
 
 mod app;
 mod audio;
+mod discard;
 mod display;
 mod frame_clock;
 mod keys;
+mod report;
 mod session;
 
 use app::App;
@@ -18,6 +20,6 @@ use winit::event_loop::EventLoop;
 pub(crate) fn run() -> Result<ExitCode, Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let mut app = App::new(env::args_os().nth(1).map(PathBuf::from));
-    event_loop.run_app(&mut app)?;
-    app.into_result()
+    let ran = event_loop.run_app(&mut app);
+    app.into_result(ran.err().map(Into::into))
 }

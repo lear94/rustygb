@@ -41,7 +41,7 @@ share of mode 3 length, the link cable and Game Boy Color features.
 * **MBC2:** Bank switching with built-in RAM.
 * **MBC3 / MBC30:** Bank switching and real-time clock.
 * **MBC5:** Bank switching; the rumble motor is ignored.
-* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on exit, on ROM change and every ~10 s (the web build uses `localStorage`). If saving fails, closing or loading another ROM asks to be repeated before losing progress. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
+* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on a normal exit, on ROM change and every ~10 s (the web build uses `localStorage`). If saving fails, closing or loading another ROM asks to be repeated before losing progress. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
 
 ---
 
@@ -66,7 +66,10 @@ cargo build --release
 
 Keys (by position, US layout): `Z` = A, `X` = B, `Space` = Select, `Enter` = Start, arrows = D-Pad, `Esc` quits.
 
-You can also drag-and-drop a `.gb` file onto the running window.
+You can also drag-and-drop a `.gb` file onto the running window (not on Wayland, where
+the window library reports no drops: pass the ROM as an argument).
+
+On Linux a Vulkan driver is required.
 
 ### Building the WebAssembly version
 
@@ -99,7 +102,7 @@ src/
 ├── bus/          System bus and OAM DMA
 ├── ppu/          Pixel Processing Unit
 ├── apu/          Audio Processing Unit
-├── cartridge/    ROM-only / MBC1 / MBC3 / MBC5 mappers
+├── cartridge/    ROM-only / MBC1 / MBC2 / MBC3 / MBC5 mappers
 ├── hardware.rs   Constants shared by every component
 ├── save.rs       Crash-safe save files
 ├── serial.rs     Serial port (no link partner)

@@ -1,8 +1,11 @@
 //! Window and the pixel surface filling it.
 
+use super::report::report;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use rusty_gb::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::error::Error;
+use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
@@ -18,7 +21,21 @@ const WINDOW_SCALE: u32 = 3;
 pub(super) struct Display {
     window: Arc<Window>,
     pixels: Pixels<'static>,
+    /// The GPU rejected an operation; without a handler that aborts the process.
+    gpu_failed: Arc<AtomicBool>,
 }
+
+/// The GPU stopped accepting work.
+#[derive(Debug)]
+struct GpuFailure;
+
+impl fmt::Display for GpuFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the GPU rejected an operation")
+    }
+}
+
+impl Error for GpuFailure {}
 
 impl Display {
     pub(super) fn open(event_loop: &ActiveEventLoop, title: &str) -> Result<Self, Box<dyn Error>> {
@@ -38,7 +55,18 @@ impl Display {
         let pixels = PixelsBuilder::new(SCREEN_WIDTH_PX, SCREEN_HEIGHT_PX, surface)
             .enable_vsync(false)
             .build()?;
-        Ok(Self { window, pixels })
+        let gpu_failed = Arc::new(AtomicBool::new(false));
+        let failure = Arc::clone(&gpu_failed);
+        pixels.device().on_uncaptured_error(Arc::new(move |e| {
+            report(format_args!("GPU error: {e}"));
+            // Pairs with nothing: the flag carries no other data.
+            failure.store(true, Ordering::Relaxed);
+        }));
+        Ok(Self {
+            window,
+            pixels,
+            gpu_failed,
+        })
     }
 
     pub(super) fn set_title(&self, title: &str) {
@@ -54,12 +82,12 @@ impl Display {
             return;
         }
         if let Err(e) = self.pixels.resize_surface(size.width, size.height) {
-            eprintln!("Resize error: {e}");
+            report(format_args!("Resize error: {e}"));
         }
     }
 
     /// Presents `frame`, or black without one.
-    pub(super) fn render(&mut self, frame: Option<&[u8]>) -> Result<(), pixels::Error> {
+    pub(super) fn render(&mut self, frame: Option<&[u8]>) -> Result<(), Box<dyn Error>> {
         if !is_visible(self.window.inner_size()) {
             return Ok(());
         }
@@ -67,7 +95,11 @@ impl Display {
             Some(frame) => self.pixels.frame_mut().copy_from_slice(frame),
             None => self.pixels.frame_mut().fill(0),
         }
-        self.pixels.render()
+        self.pixels.render()?;
+        if self.gpu_failed.load(Ordering::Relaxed) {
+            return Err(GpuFailure.into());
+        }
+        Ok(())
     }
 }
 

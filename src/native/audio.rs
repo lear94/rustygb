@@ -3,6 +3,7 @@
 //! The emulation thread pushes into a bounded channel; the device callback pops without
 //! blocking and plays silence when it runs dry.
 
+use super::report::report;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -157,7 +158,7 @@ fn build_stream<T: SizedSample + FromSample<f32>>(
             fill_frames(data, channels, || receiver.try_recv().unwrap_or(0.0));
         },
         move |e| {
-            eprintln!("Audio stream error: {e}");
+            report(format_args!("Audio stream error: {e}"));
             if ends_stream(e.kind()) {
                 lost.store(true, Ordering::Relaxed);
             }
