@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 /// Bridge capacity as a fraction of a second (125 ms), the latency bound.
 const BRIDGE_FRACTION: u32 = 8;
-/// Silence queued after running dry (~31 ms), so one late frame is not one more gap.
-const PREFILL_FRACTION: u32 = 32;
+/// Silence queued after running dry (~62 ms): several frames, because Windows timers wake
+/// up to 16 ms late.
+const PREFILL_FRACTION: u32 = 16;
 const SCRATCH_LEN_SAMPLES: usize = 1024;
 
 pub(super) struct AudioOutput {
