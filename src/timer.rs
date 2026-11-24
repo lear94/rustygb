@@ -1,6 +1,7 @@
 //! DMG timer block: DIV, TIMA, TMA and TAC.
 
 use crate::hardware::{OPEN_BUS, T_CYCLES_PER_M_CYCLE};
+use crate::memory_map::{DIV, TAC, TIMA, TMA};
 
 /// Divider when the first opcode fetch begins after the DMG boot ROM.
 const POST_BOOT_DIVIDER: u16 = 0xABC8;
@@ -102,10 +103,10 @@ impl Timer {
     #[must_use]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xFF04 => self.divider.to_be_bytes()[0],
-            0xFF05 => self.tima,
-            0xFF06 => self.tma,
-            0xFF07 => self.tac | TAC_UNUSED,
+            DIV => self.divider.to_be_bytes()[0],
+            TIMA => self.tima,
+            TMA => self.tma,
+            TAC => self.tac | TAC_UNUSED,
             _ => OPEN_BUS,
         }
     }
@@ -113,19 +114,19 @@ impl Timer {
     /// Writes a timer register; other addresses are ignored.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF04 => self.reset_divider(),
+            DIV => self.reset_divider(),
             // The reload wins over a write landing on the same M-cycle.
-            0xFF05 if self.phase != Phase::Reloading => {
+            TIMA if self.phase != Phase::Reloading => {
                 self.tima = val;
                 self.phase = Phase::Counting;
             }
-            0xFF06 => {
+            TMA => {
                 self.tma = val;
                 if self.phase == Phase::Reloading {
                     self.tima = val;
                 }
             }
-            0xFF07 => self.change_input(self.divider, val & TAC_MASK),
+            TAC => self.change_input(self.divider, val & TAC_MASK),
             _ => {}
         }
     }

@@ -33,6 +33,7 @@ pub mod cartridge;
 pub mod cpu;
 mod hardware;
 pub mod joypad;
+mod memory_map;
 pub mod ppu;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod save;
@@ -65,6 +66,9 @@ impl GameBoy {
     ///
     /// # Errors
     /// Same as [`Cartridge::from_bytes`].
+    ///
+    /// # Complexity
+    /// O(rom + ram) time and space.
     pub fn from_rom(rom: Vec<u8>, sample_rate: u32) -> Result<Self, CartridgeError> {
         Self::from_rom_with_save(rom, None, sample_rate)
     }
@@ -73,6 +77,9 @@ impl GameBoy {
     ///
     /// # Errors
     /// Same as [`Cartridge::from_bytes`].
+    ///
+    /// # Complexity
+    /// O(rom + ram) time and space.
     pub fn from_rom_with_save(
         rom: Vec<u8>,
         saved_ram: Option<Vec<u8>>,
@@ -87,6 +94,9 @@ impl GameBoy {
     }
 
     /// Run the CPU for one full frame's worth of T-cycles.
+    ///
+    /// # Complexity
+    /// O(1): bounded by [`CYCLES_PER_FRAME`]; no allocation.
     pub fn run_frame(&mut self) {
         let mut cycles = self.overshoot;
         while cycles < CYCLES_PER_FRAME {
@@ -104,8 +114,16 @@ impl GameBoy {
 
     /// Drain up to `out.len()` mixed audio samples into `out` and return
     /// how many were written.
+    ///
+    /// # Complexity
+    /// O(`out.len()`) time, no allocation.
     pub fn drain_audio(&mut self, out: &mut [f32]) -> usize {
         self.bus.apu.drain_samples(out)
+    }
+
+    /// Changes the audio output rate, as when the host device is replaced.
+    pub fn set_sample_rate(&mut self, sample_rate_hz: u32) {
+        self.bus.apu.set_sample_rate(sample_rate_hz);
     }
 
     /// Number of audio samples currently buffered by the APU.
@@ -176,5 +194,13 @@ mod tests {
     #[test]
     fn from_rom_invalid_is_error() {
         assert!(GameBoy::from_rom(Vec::new(), 48_000).is_err());
+    }
+
+    #[test]
+    fn set_sample_rate_changes_output() {
+        let mut gb = game(&[0x18, 0xFE]);
+        gb.set_sample_rate(96_000);
+        gb.run_frame();
+        assert_eq!(gb.buffered_audio(), 1607);
     }
 }

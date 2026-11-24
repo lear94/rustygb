@@ -117,6 +117,9 @@ impl WasmGameBoy {
     }
 
     /// Get the current 160×144 RGBA8 frame as a freshly-allocated `Uint8Array`.
+    ///
+    /// # Complexity
+    /// O(frame) time and space: a view into wasm memory would dangle when it grows.
     #[must_use]
     pub fn frame(&self) -> Vec<u8> {
         self.inner.frame().to_vec()
@@ -124,6 +127,9 @@ impl WasmGameBoy {
 
     /// Drain up to `max` queued audio samples and return them. An empty
     /// vector is returned when no samples are available.
+    ///
+    /// # Complexity
+    /// O(`max`) time and space, for the same reason as `frame`.
     pub fn drain_audio(&mut self, max: usize) -> Vec<f32> {
         let mut buf = vec![0.0; max.min(self.inner.buffered_audio())];
         self.inner.drain_audio(&mut buf);

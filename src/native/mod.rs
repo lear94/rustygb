@@ -16,7 +16,7 @@ use std::convert::Infallible;
 use std::env;
 use std::error::Error;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -31,6 +31,8 @@ const WINDOW_SCALE: u32 = 3;
 /// Core output rate while no audio device consumes it.
 const SILENT_SAMPLE_RATE_HZ: u32 = 48_000;
 
+/// Opening a device can stall, so failures are not retried every frame.
+const AUDIO_RETRY_PERIOD: Duration = Duration::from_secs(5);
 /// Exit code of a session closed with unsaved progress.
 const EXIT_UNSAVED: i32 = 2;
 
@@ -39,6 +41,8 @@ struct App {
     pixels: Pixels,
     keys: Keys,
     audio: Option<AudioOutput>,
+    /// When to look for a replacement of a lost device.
+    audio_retry: Option<Instant>,
     session: Option<Session>,
     clock: FrameClock,
     /// The user was told that repeating the action loses progress.
@@ -79,6 +83,7 @@ impl App {
             pixels,
             keys: Keys::default(),
             audio,
+            audio_retry: None,
             session: None,
             clock: FrameClock::new(Instant::now()),
             discard_armed: false,
@@ -149,6 +154,7 @@ impl App {
         if matches!(control_flow, ControlFlow::ExitWithCode(_)) {
             return;
         }
+        self.recover_audio();
         let mut redraw = false;
         // Bounded: the clock drops lag beyond a few frames.
         while self.clock.frame_due(Instant::now()) {
@@ -167,6 +173,24 @@ impl App {
             self.window.request_redraw();
         }
         *control_flow = ControlFlow::WaitUntil(self.clock.next_frame());
+    }
+
+    /// Reopens the output after its device disappeared.
+    fn recover_audio(&mut self) {
+        let lost = self.audio.as_ref().is_some_and(AudioOutput::is_lost);
+        let now = Instant::now();
+        if lost {
+            self.audio = None;
+            self.audio_retry = Some(now);
+        }
+        if self.audio_retry.is_none_or(|retry| now < retry) {
+            return;
+        }
+        self.audio = AudioOutput::open().ok();
+        self.audio_retry = self.audio.is_none().then_some(now + AUDIO_RETRY_PERIOD);
+        if let (Some(audio), Some(session)) = (&self.audio, &mut self.session) {
+            session.gb.set_sample_rate(audio.sample_rate_hz());
+        }
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {

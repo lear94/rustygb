@@ -4,10 +4,12 @@
 //! blocking and plays silence when it runs dry.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig, StreamError};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rusty_gb::GameBoy;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Bridge capacity as a fraction of a second (125 ms), the latency bound.
 const BRIDGE_FRACTION: u32 = 8;
@@ -19,6 +21,7 @@ pub(super) struct AudioOutput {
     /// Playback stops when the stream is dropped.
     _stream: Stream,
     sender: Sender<f32>,
+    lost: Arc<AtomicBool>,
     sample_rate_hz: u32,
     prefill_samples: u32,
     scratch: [f32; SCRATCH_LEN_SAMPLES],
@@ -32,19 +35,21 @@ impl AudioOutput {
         let supported = device.default_output_config()?;
         let config = supported.config();
         let sample_rate_hz = config.sample_rate.0;
+        let lost = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = bounded(usize::try_from(sample_rate_hz / BRIDGE_FRACTION)?);
         let stream = match supported.sample_format() {
-            SampleFormat::F32 => build_stream::<f32>(&device, &config, receiver),
-            SampleFormat::I16 => build_stream::<i16>(&device, &config, receiver),
-            SampleFormat::U16 => build_stream::<u16>(&device, &config, receiver),
-            SampleFormat::I32 => build_stream::<i32>(&device, &config, receiver),
-            SampleFormat::U8 => build_stream::<u8>(&device, &config, receiver),
+            SampleFormat::F32 => build_stream::<f32>(&device, &config, receiver, &lost),
+            SampleFormat::I16 => build_stream::<i16>(&device, &config, receiver, &lost),
+            SampleFormat::U16 => build_stream::<u16>(&device, &config, receiver, &lost),
+            SampleFormat::I32 => build_stream::<i32>(&device, &config, receiver, &lost),
+            SampleFormat::U8 => build_stream::<u8>(&device, &config, receiver, &lost),
             other => return Err(format!("unsupported sample format {other}").into()),
         }?;
         stream.play()?;
         Ok(Self {
             _stream: stream,
             sender,
+            lost,
             sample_rate_hz,
             prefill_samples: sample_rate_hz / PREFILL_FRACTION,
             scratch: [0.0; SCRATCH_LEN_SAMPLES],
@@ -62,16 +67,56 @@ impl AudioOutput {
                 let _ = self.sender.try_send(0.0);
             }
         }
+        let mut correction = self.correction();
         loop {
             let count = gb.drain_audio(&mut self.scratch);
             for &sample in self.scratch.iter().take(count) {
-                // A full bridge means the device lags; dropping keeps latency bounded.
-                let _ = self.sender.try_send(sample);
+                let repeats = match std::mem::replace(&mut correction, Correction::Keep) {
+                    Correction::Keep => 1,
+                    Correction::Drop => 0,
+                    Correction::Repeat => 2,
+                };
+                for _ in 0..repeats {
+                    // A full bridge means the device lags; dropping keeps latency bounded.
+                    let _ = self.sender.try_send(sample);
+                }
             }
             if count < SCRATCH_LEN_SAMPLES {
                 return;
             }
         }
+    }
+
+    /// Returns whether the device disappeared and the output must be reopened.
+    pub(super) fn is_lost(&self) -> bool {
+        // Pairs with nothing: the flag carries no other data.
+        self.lost.load(Ordering::Relaxed)
+    }
+
+    fn correction(&self) -> Correction {
+        let target = usize::try_from(self.prefill_samples).unwrap_or(usize::MAX);
+        correction(self.sender.len(), target)
+    }
+}
+
+/// Change to one sample of a frame: ~0.1 % of pitch, inaudible, and enough to follow any
+/// drift between the frame clock and the device clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Correction {
+    Keep,
+    Drop,
+    Repeat,
+}
+
+/// Steers the queue towards its target, with a dead band of half of it.
+fn correction(queued: usize, target: usize) -> Correction {
+    let band = target / 2;
+    if queued < target.saturating_sub(band) {
+        Correction::Repeat
+    } else if queued > target.saturating_add(band) {
+        Correction::Drop
+    } else {
+        Correction::Keep
     }
 }
 
@@ -79,14 +124,21 @@ fn build_stream<T: SizedSample + FromSample<f32>>(
     device: &Device,
     config: &StreamConfig,
     receiver: Receiver<f32>,
+    lost: &Arc<AtomicBool>,
 ) -> Result<Stream, cpal::BuildStreamError> {
     let channels = usize::from(config.channels);
+    let lost = Arc::clone(lost);
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             fill_frames(data, channels, || receiver.try_recv().unwrap_or(0.0));
         },
-        |e| eprintln!("Audio stream error: {e}"),
+        move |e| {
+            eprintln!("Audio stream error: {e}");
+            if matches!(e, StreamError::DeviceNotAvailable) {
+                lost.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )
 }
@@ -125,6 +177,19 @@ mod tests {
                 filled(channels).map(f32::to_bits),
                 expected.map(f32::to_bits)
             );
+        }
+    }
+
+    #[test]
+    fn correction_steers_towards_target() {
+        for (queued, expected) in [
+            (0, Correction::Repeat),
+            (749, Correction::Repeat),
+            (750, Correction::Keep),
+            (2250, Correction::Keep),
+            (2251, Correction::Drop),
+        ] {
+            assert_eq!(correction(queued, 1500), expected, "{queued}");
         }
     }
 

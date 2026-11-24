@@ -1,6 +1,6 @@
 //! MBC2: 16 ROM banks and 512 built-in half-bytes of RAM.
 
-use super::{enables_ram, RamTarget};
+use super::{enables_ram, RamTarget, REGISTERS_START, ROM_BANK_END};
 
 const ROM_MASK: u8 = 0x0F;
 /// Address line choosing the ROM bank register over RAM enable.
@@ -35,10 +35,10 @@ impl Mbc2 {
 
     pub(super) fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x3FFF if addr & ROM_REGISTER_LINE != 0 => {
+            REGISTERS_START..=ROM_BANK_END if addr & ROM_REGISTER_LINE != 0 => {
                 self.rom_bank = (val & ROM_MASK).max(1);
             }
-            0x0000..=0x3FFF => self.ram_enabled = enables_ram(val),
+            REGISTERS_START..=ROM_BANK_END => self.ram_enabled = enables_ram(val),
             _ => {}
         }
     }

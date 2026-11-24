@@ -8,6 +8,11 @@ use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::hardware::OPEN_BUS;
 use crate::joypad::Joypad;
+use crate::memory_map::{
+    DIV, DMA, ECHO_END, EXTERNAL_RAM_END, EXTERNAL_RAM_START, HIGH_PAGE_END, HIGH_PAGE_START,
+    HRAM_END, HRAM_START, IE, IF, LCDC, NR10, OAM_END, OAM_START, P1, ROM_END, ROM_FIXED_START, SB,
+    SC, TAC, UNUSABLE_END, UNUSABLE_START, VRAM_END, VRAM_START, WAVE_END, WRAM_START, WX,
+};
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
@@ -117,7 +122,7 @@ impl Motherboard {
     #[must_use]
     pub fn read_byte(&self, addr: u16) -> u8 {
         match addr {
-            0xFE00..=0xFE9F if self.dma.is_busy() => OPEN_BUS,
+            OAM_START..=OAM_END if self.dma.is_busy() => OPEN_BUS,
             _ => self.read_unblocked(addr),
         }
     }
@@ -125,82 +130,86 @@ impl Motherboard {
     /// Writes a byte as the CPU does; unmapped addresses are ignored.
     pub fn write_byte(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x7FFF | 0xA000..=0xBFFF => self.cartridge.write(addr, val),
-            0x8000..=0x9FFF => self.ppu.write(addr, val),
-            0xC000..=0xFDFF => {
+            ROM_FIXED_START..=ROM_END | EXTERNAL_RAM_START..=EXTERNAL_RAM_END => {
+                self.cartridge.write(addr, val);
+            }
+            VRAM_START..=VRAM_END => self.ppu.write(addr, val),
+            WRAM_START..=ECHO_END => {
                 if let Some(cell) = self.wram.get_mut(usize::from(addr & WRAM_MASK)) {
                     *cell = val;
                 }
             }
-            0xFE00..=0xFE9F if !self.dma.is_busy() => self.ppu.write(addr, val),
-            0xFE00..=0xFEFF => {}
-            0xFF00..=0xFFFF => self.write_high(addr, val),
+            OAM_START..=OAM_END if !self.dma.is_busy() => self.ppu.write(addr, val),
+            OAM_START..=UNUSABLE_END => {}
+            HIGH_PAGE_START..=HIGH_PAGE_END => self.write_high(addr, val),
         }
     }
 
     fn read_unblocked(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..=0x7FFF | 0xA000..=0xBFFF => self.cartridge.read(addr),
-            0x8000..=0x9FFF | 0xFE00..=0xFE9F => self.ppu.read(addr),
-            0xC000..=0xFDFF => self
+            ROM_FIXED_START..=ROM_END | EXTERNAL_RAM_START..=EXTERNAL_RAM_END => {
+                self.cartridge.read(addr)
+            }
+            VRAM_START..=VRAM_END | OAM_START..=OAM_END => self.ppu.read(addr),
+            WRAM_START..=ECHO_END => self
                 .wram
                 .get(usize::from(addr & WRAM_MASK))
                 .copied()
                 .unwrap_or(OPEN_BUS),
             // DMG decodes no device here and drives zeros.
-            0xFEA0..=0xFEFF => 0,
-            0xFF00..=0xFFFF => self.read_high(addr),
+            UNUSABLE_START..=UNUSABLE_END => 0,
+            HIGH_PAGE_START..=HIGH_PAGE_END => self.read_high(addr),
         }
     }
 
     fn read_high(&self, addr: u16) -> u8 {
         match addr {
-            0xFF10..=0xFF3F => self.apu.read(addr),
-            0xFF46 => self.dma.register(),
-            0xFF40..=0xFF4B => self.ppu.read(addr),
-            0xFF80..=0xFFFE => self
+            NR10..=WAVE_END => self.apu.read(addr),
+            DMA => self.dma.register(),
+            LCDC..=WX => self.ppu.read(addr),
+            HRAM_START..=HRAM_END => self
                 .hram
                 .get(usize::from(addr - HRAM_BASE))
                 .copied()
                 .unwrap_or(OPEN_BUS),
-            0xFFFF => self.ie,
+            IE => self.ie,
             _ => self.read_io(addr),
         }
     }
 
     fn read_io(&self, addr: u16) -> u8 {
         match addr {
-            0xFF00 => self.joypad.read(),
-            0xFF01 => self.serial.data(),
-            0xFF02 => self.serial.control(),
-            0xFF04..=0xFF07 => self.timer.read(addr),
-            0xFF0F => self.if_reg | IF_UNUSED,
+            P1 => self.joypad.read(),
+            SB => self.serial.data(),
+            SC => self.serial.control(),
+            DIV..=TAC => self.timer.read(addr),
+            IF => self.if_reg | IF_UNUSED,
             _ => OPEN_BUS,
         }
     }
 
     fn write_high(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF10..=0xFF3F => self.apu.write(addr, val),
-            0xFF46 => self.dma.start(val),
-            0xFF40..=0xFF4B => self.ppu.write(addr, val),
-            0xFF80..=0xFFFE => {
+            NR10..=WAVE_END => self.apu.write(addr, val),
+            DMA => self.dma.start(val),
+            LCDC..=WX => self.ppu.write(addr, val),
+            HRAM_START..=HRAM_END => {
                 if let Some(cell) = self.hram.get_mut(usize::from(addr - HRAM_BASE)) {
                     *cell = val;
                 }
             }
-            0xFFFF => self.ie = val,
+            IE => self.ie = val,
             _ => self.write_io(addr, val),
         }
     }
 
     fn write_io(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF00 => self.joypad.write(val),
-            0xFF01 => self.serial.write_data(val),
-            0xFF02 => self.serial.write_control(val),
-            0xFF04..=0xFF07 => self.timer.write(addr, val),
-            0xFF0F => self.if_reg = val | IF_UNUSED,
+            P1 => self.joypad.write(val),
+            SB => self.serial.write_data(val),
+            SC => self.serial.write_control(val),
+            DIV..=TAC => self.timer.write(addr, val),
+            IF => self.if_reg = val | IF_UNUSED,
             _ => {}
         }
     }

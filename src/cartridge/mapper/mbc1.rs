@@ -1,6 +1,9 @@
 //! MBC1 and its multicart wiring.
 
-use super::{enables_ram, RamTarget};
+use super::{
+    enables_ram, RamTarget, RAM_BANK_END, RAM_BANK_START, RAM_ENABLE_END, REGISTERS_START,
+    ROM_BANK_END, ROM_BANK_START,
+};
 
 const LOW_MASK: u8 = 0x1F;
 const HIGH_MASK: u8 = 0x03;
@@ -55,11 +58,11 @@ impl Mbc1 {
 
     pub(super) fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x1FFF => self.ram_enabled = enables_ram(val),
+            REGISTERS_START..=RAM_ENABLE_END => self.ram_enabled = enables_ram(val),
             // Only the 5-bit register is checked for zero, so banks 0x20/0x40/0x60 are
             // unreachable here, as on hardware.
-            0x2000..=0x3FFF => self.low = (val & LOW_MASK).max(1),
-            0x4000..=0x5FFF => self.high = val & HIGH_MASK,
+            ROM_BANK_START..=ROM_BANK_END => self.low = (val & LOW_MASK).max(1),
+            RAM_BANK_START..=RAM_BANK_END => self.high = val & HIGH_MASK,
             _ => self.advanced = val & 1 != 0,
         }
     }

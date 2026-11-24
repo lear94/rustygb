@@ -3,7 +3,10 @@
 //! Bank numbers keep every MBC30 line; the cartridge masks them to its real sizes, which
 //! reproduces the narrower MBC3.
 
-use super::{enables_ram, RamTarget};
+use super::{
+    enables_ram, RamTarget, RAM_BANK_END, RAM_BANK_START, RAM_ENABLE_END, REGISTERS_START,
+    ROM_BANK_END, ROM_BANK_START,
+};
 
 const LAST_RAM_BANK: u8 = 0x07;
 
@@ -37,9 +40,9 @@ impl Mbc3 {
 
     pub(super) fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x1FFF => self.ram_enabled = enables_ram(val),
-            0x2000..=0x3FFF => self.rom_bank = val.max(1),
-            0x4000..=0x5FFF => self.ram_select = val & 0x0F,
+            REGISTERS_START..=RAM_ENABLE_END => self.ram_enabled = enables_ram(val),
+            ROM_BANK_START..=ROM_BANK_END => self.rom_bank = val.max(1),
+            RAM_BANK_START..=RAM_BANK_END => self.ram_select = val & 0x0F,
             _ => {}
         }
     }

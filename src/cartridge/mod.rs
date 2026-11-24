@@ -8,6 +8,10 @@ mod rtc;
 pub use error::CartridgeError;
 
 use crate::hardware::OPEN_BUS;
+use crate::memory_map::{
+    EXTERNAL_RAM_END, EXTERNAL_RAM_START, ROM_END, ROM_FIXED_END, ROM_FIXED_START,
+    ROM_SWITCHABLE_START,
+};
 use header::Header;
 use mapper::{Mapper, RamTarget};
 use rtc::Rtc;
@@ -20,6 +24,8 @@ const MIN_ROM_LEN: usize = 2 << ROM_BANK_SHIFT;
 const MAX_ROM_LEN: usize = 512 << ROM_BANK_SHIFT;
 const RAM_BANK_SHIFT: u32 = 13;
 const RAM_BANK_MASK: u16 = (1 << RAM_BANK_SHIFT) - 1;
+/// First address of the clock latch register.
+const RTC_LATCH_START: u16 = 0x6000;
 /// Save length other emulators write for 2 KiB cartridges.
 const PADDED_SAVE_LEN: usize = 8 * 1024;
 
@@ -95,9 +101,11 @@ impl Cartridge {
     #[must_use]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..=0x3FFF => self.read_rom(self.mapper.fixed_rom_bank(), addr),
-            0x4000..=0x7FFF => self.read_rom(self.mapper.switchable_rom_bank(), addr),
-            0xA000..=0xBFFF => self.read_ram(addr),
+            ROM_FIXED_START..=ROM_FIXED_END => self.read_rom(self.mapper.fixed_rom_bank(), addr),
+            ROM_SWITCHABLE_START..=ROM_END => {
+                self.read_rom(self.mapper.switchable_rom_bank(), addr)
+            }
+            EXTERNAL_RAM_START..=EXTERNAL_RAM_END => self.read_ram(addr),
             _ => OPEN_BUS,
         }
     }
@@ -105,13 +113,13 @@ impl Cartridge {
     /// Writes a controller register (`0x0000-0x7FFF`) or external RAM.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x7FFF => {
+            ROM_FIXED_START..=ROM_END => {
                 self.mapper.write_register(addr, val);
-                if let (0x6000.., Some(rtc)) = (addr, &mut self.rtc) {
+                if let (RTC_LATCH_START.., Some(rtc)) = (addr, &mut self.rtc) {
                     rtc.write_latch(val);
                 }
             }
-            0xA000..=0xBFFF => self.write_ram(addr, val),
+            EXTERNAL_RAM_START..=EXTERNAL_RAM_END => self.write_ram(addr, val),
             _ => {}
         }
     }

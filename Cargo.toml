@@ -20,13 +20,13 @@ bench = false
 # Native (desktop) front-end dependencies.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # GPU-scaled pixel buffer.
-pixels = "0.13.0"
+pixels = { version = "0.13.0", default-features = false }
 # Window and event loop; the version `pixels` 0.13 shares raw-window-handle with.
-winit = "0.28.7"
+winit = { version = "0.28.7", default-features = false, features = ["x11", "wayland", "wayland-dlopen"] }
 # Cross-platform audio output.
-cpal = "0.15.2"
+cpal = { version = "0.15.2", default-features = false }
 # Lock-free bounded channel: the audio callback must not block.
-crossbeam-channel = "0.5.8"
+crossbeam-channel = { version = "0.5.8", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Statistical benchmarks with stored baselines; `std` has no stable harness.

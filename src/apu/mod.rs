@@ -10,6 +10,10 @@ mod tests;
 mod wave;
 
 use crate::hardware::{M_CYCLES_PER_SECOND, OPEN_BUS};
+use crate::memory_map::{
+    NR10, NR11, NR12, NR14, NR20, NR21, NR24, NR30, NR31, NR32, NR33, NR34, NR41, NR42, NR43, NR44,
+    NR50, NR51, NR52, WAVE_END, WAVE_START,
+};
 use noise::Noise;
 use square::Square;
 use std::collections::VecDeque;
@@ -28,9 +32,6 @@ const MAX_SIDE_GAIN: f32 = 16.0;
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
 const WAVE_RAM_BASE: u16 = 0xFF30;
-const NR50: u16 = 0xFF24;
-const NR51: u16 = 0xFF25;
-const NR52: u16 = 0xFF26;
 const POWER: u8 = 0x80;
 const TRIGGER: u8 = 0x80;
 const LENGTH_ENABLE: u8 = 0x40;
@@ -45,9 +46,9 @@ const READ_MASKS: [u8; REGISTER_COUNT] = [
 ];
 /// Registers as the DMG boot ROM leaves them; its chime has faded but CH1 is still on.
 const POST_BOOT_WRITES: [(u16, u8); 5] = [
-    (0xFF10, 0x80),
-    (0xFF11, 0x80),
-    (0xFF12, 0xF3),
+    (NR10, 0x80),
+    (NR11, 0x80),
+    (NR12, 0xF3),
     (NR50, 0x77),
     (NR51, 0xF3),
 ];
@@ -94,7 +95,7 @@ impl Apu {
             registers: [0; REGISTER_COUNT],
             powered: true,
             sequencer_step: 0,
-            sample_rate_hz: sample_rate_hz.min(M_CYCLES_PER_SECOND),
+            sample_rate_hz: capped_rate(sample_rate_hz),
             sample_phase: 0,
             samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
         };
@@ -103,6 +104,11 @@ impl Apu {
         }
         apu.square_1.enabled = true;
         apu
+    }
+
+    /// Changes the output rate; see [`Self::new`].
+    pub fn set_sample_rate(&mut self, sample_rate_hz: u32) {
+        self.sample_rate_hz = capped_rate(sample_rate_hz);
     }
 
     /// Moves the oldest samples into `out` and returns how many were written.
@@ -163,7 +169,7 @@ impl Apu {
     #[must_use]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xFF30..=0xFF3F => self.wave.read_ram(offset(addr, WAVE_RAM_BASE)),
+            WAVE_START..=WAVE_END => self.wave.read_ram(offset(addr, WAVE_RAM_BASE)),
             NR52 => self.status(),
             _ => {
                 let idx = offset(addr, REGISTER_BASE);
@@ -178,7 +184,7 @@ impl Apu {
     /// Writes an APU register or wave RAM; other addresses are ignored.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF30..=0xFF3F => self.wave.write_ram(offset(addr, WAVE_RAM_BASE), val),
+            WAVE_START..=WAVE_END => self.wave.write_ram(offset(addr, WAVE_RAM_BASE), val),
             NR52 => self.write_power(val),
             _ => {
                 self.write_length(addr, val);
@@ -192,10 +198,10 @@ impl Apu {
     /// DMG length counters stay writable while powered off.
     fn write_length(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF11 => self.square_1.write_length(val),
-            0xFF16 => self.square_2.write_length(val),
-            0xFF1B => self.wave.write_length(val),
-            0xFF20 => self.noise.write_length(val),
+            NR11 => self.square_1.write_length(val),
+            NR21 => self.square_2.write_length(val),
+            NR31 => self.wave.write_length(val),
+            NR41 => self.noise.write_length(val),
             _ => {}
         }
     }
@@ -205,29 +211,29 @@ impl Apu {
             *register = val;
         }
         match addr {
-            0xFF10 => self.square_1.write_sweep(val),
-            0xFF11..=0xFF14 => {
+            NR10 => self.square_1.write_sweep(val),
+            NR11..=NR14 => {
                 let control = self.control(val);
-                write_square(&mut self.square_1, addr - 0xFF10, val, control);
+                write_square(&mut self.square_1, addr - NR10, val, control);
             }
-            0xFF16..=0xFF19 => {
+            NR21..=NR24 => {
                 let control = self.control(val);
-                write_square(&mut self.square_2, addr - 0xFF15, val, control);
+                write_square(&mut self.square_2, addr - NR20, val, control);
             }
-            0xFF1A..=0xFF1E => self.write_wave(addr, val),
-            0xFF21 => self.noise.write_envelope(val),
-            0xFF22 => self.noise.write_polynomial(val),
-            0xFF23 => self.noise.write_control(self.control(val)),
+            NR30..=NR34 => self.write_wave(addr, val),
+            NR42 => self.noise.write_envelope(val),
+            NR43 => self.noise.write_polynomial(val),
+            NR44 => self.noise.write_control(self.control(val)),
             _ => {}
         }
     }
 
     fn write_wave(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF1A => self.wave.write_dac(val),
-            0xFF1C => self.wave.write_volume(val),
-            0xFF1D => self.wave.write_frequency_low(val),
-            0xFF1E => self.wave.write_control(self.control(val)),
+            NR30 => self.wave.write_dac(val),
+            NR32 => self.wave.write_volume(val),
+            NR33 => self.wave.write_frequency_low(val),
+            NR34 => self.wave.write_control(self.control(val)),
             _ => {}
         }
     }
@@ -236,7 +242,7 @@ impl Apu {
         let powered = val & POWER != 0;
         if self.powered && !powered {
             for addr in REGISTER_BASE..NR52 {
-                if !matches!(addr, 0xFF11 | 0xFF16 | 0xFF1B | 0xFF20) {
+                if !matches!(addr, NR11 | NR21 | NR31 | NR41) {
                     self.write_register(addr, 0);
                 }
             }
@@ -326,6 +332,11 @@ impl Apu {
         }
         mixed * (CHANNEL_GAIN / MAX_SIDE_GAIN)
     }
+}
+
+/// At most one sample per M-cycle.
+fn capped_rate(sample_rate_hz: u32) -> u32 {
+    sample_rate_hz.min(M_CYCLES_PER_SECOND)
 }
 
 /// Writes register `NRx<number>` of a square channel.

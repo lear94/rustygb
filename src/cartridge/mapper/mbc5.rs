@@ -1,7 +1,13 @@
 //! MBC5 and its rumble variant.
 
-use super::{RamTarget, RAM_ENABLE_KEY};
+use super::{
+    RamTarget, RAM_BANK_END, RAM_BANK_START, RAM_ENABLE_END, RAM_ENABLE_KEY, REGISTERS_START,
+    ROM_BANK_END, ROM_BANK_START,
+};
 
+/// The ROM bank register is split in two.
+const ROM_LOW_END: u16 = 0x2FFF;
+const ROM_HIGH_START: u16 = 0x3000;
 const RAM_MASK: u8 = 0x0F;
 /// On rumble cartridges bit 3 drives the motor instead of selecting RAM.
 const RUMBLE_RAM_MASK: u8 = 0x07;
@@ -45,10 +51,10 @@ impl Mbc5 {
     pub(super) fn write(&mut self, addr: u16, val: u8) {
         match addr {
             // Unlike earlier controllers, all eight bits are compared.
-            0x0000..=0x1FFF => self.ram_enabled = val == RAM_ENABLE_KEY,
-            0x2000..=0x2FFF => self.rom_low = val,
-            0x3000..=0x3FFF => self.rom_high = val & 1,
-            0x4000..=0x5FFF => self.ram_bank = val & self.ram_mask,
+            REGISTERS_START..=RAM_ENABLE_END => self.ram_enabled = val == RAM_ENABLE_KEY,
+            ROM_BANK_START..=ROM_LOW_END => self.rom_low = val,
+            ROM_HIGH_START..=ROM_BANK_END => self.rom_high = val & 1,
+            RAM_BANK_START..=RAM_BANK_END => self.ram_bank = val & self.ram_mask,
             _ => {}
         }
     }

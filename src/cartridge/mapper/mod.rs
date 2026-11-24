@@ -10,6 +10,13 @@ use mbc2::Mbc2;
 use mbc3::Mbc3;
 use mbc5::Mbc5;
 
+/// Register windows, shared by every controller up to naming.
+const REGISTERS_START: u16 = 0x0000;
+const RAM_ENABLE_END: u16 = 0x1FFF;
+const ROM_BANK_START: u16 = 0x2000;
+const ROM_BANK_END: u16 = 0x3FFF;
+const RAM_BANK_START: u16 = 0x4000;
+const RAM_BANK_END: u16 = 0x5FFF;
 const RAM_ENABLE_MASK: u8 = 0x0F;
 const RAM_ENABLE_KEY: u8 = 0x0A;
 
