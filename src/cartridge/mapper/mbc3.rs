@@ -10,6 +10,9 @@ use super::{
 
 const ROM_MASK: u8 = 0x7F;
 const MBC30_ROM_MASK: u8 = 0xFF;
+const RAM_SELECT_MASK: u8 = 0x0F;
+const FIRST_RTC_REGISTER: u8 = 0x08;
+const LAST_RTC_REGISTER: u8 = 0x0C;
 const LAST_RAM_BANK: u8 = 0x07;
 
 #[derive(Debug)]
@@ -37,7 +40,7 @@ impl Mbc3 {
     pub(super) fn ram_target(&self) -> RamTarget {
         match (self.ram_enabled, self.ram_select) {
             (true, bank @ 0..=LAST_RAM_BANK) => RamTarget::Bank(usize::from(bank)),
-            (true, register @ 0x08..=0x0C) => RamTarget::Rtc(register),
+            (true, register @ FIRST_RTC_REGISTER..=LAST_RTC_REGISTER) => RamTarget::Rtc(register),
             _ => RamTarget::Disabled,
         }
     }
@@ -46,7 +49,7 @@ impl Mbc3 {
         match addr {
             REGISTERS_START..=RAM_ENABLE_END => self.ram_enabled = enables_ram(val),
             ROM_BANK_START..=ROM_BANK_END => self.rom_bank = (val & self.rom_mask).max(1),
-            RAM_BANK_START..=RAM_BANK_END => self.ram_select = val & 0x0F,
+            RAM_BANK_START..=RAM_BANK_END => self.ram_select = val & RAM_SELECT_MASK,
             _ => {}
         }
     }

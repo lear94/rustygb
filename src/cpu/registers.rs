@@ -8,6 +8,10 @@ pub const FLAG_N: u8 = 0x40;
 pub const FLAG_H: u8 = 0x20;
 /// Carry flag.
 pub const FLAG_C: u8 = 0x10;
+/// Width of an 8-bit operand encoding.
+const R8_MASK: u8 = 7;
+/// Width of a pair or condition encoding.
+const TWO_BIT_MASK: u8 = 3;
 /// The low nibble of F does not exist.
 const F_MASK: u8 = 0xF0;
 
@@ -35,7 +39,7 @@ pub(super) enum R8 {
 
 impl R8 {
     pub(super) const fn from_bits(bits: u8) -> Self {
-        match bits & 7 {
+        match bits & R8_MASK {
             0 => Self::B,
             1 => Self::C,
             2 => Self::D,
@@ -60,7 +64,7 @@ pub(super) enum R16 {
 
 impl R16 {
     pub(super) const fn from_bits(bits: u8, slot_3: Self) -> Self {
-        match bits & 3 {
+        match bits & TWO_BIT_MASK {
             0 => Self::Bc,
             1 => Self::De,
             2 => Self::Hl,
@@ -142,7 +146,7 @@ impl Registers {
 
     /// Evaluates the condition in bits 3-4 of an opcode: NZ, Z, NC, C.
     pub(super) fn condition(&self, bits: u8) -> bool {
-        match bits & 3 {
+        match bits & TWO_BIT_MASK {
             0 => !self.has_flag(FLAG_Z),
             1 => self.has_flag(FLAG_Z),
             2 => !self.has_flag(FLAG_C),

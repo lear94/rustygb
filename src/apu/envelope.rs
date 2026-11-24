@@ -6,6 +6,7 @@ const MAX_VOLUME: u8 = 15;
 const AMPLITUDE_PER_VOLUME: i16 = FULL_SCALE / MAX_VOLUME as i16;
 /// A zero period behaves as 8 in the timer.
 const ZERO_PERIOD: u8 = 8;
+const VOLUME_SHIFT: u32 = 4;
 const PERIOD_MASK: u8 = 0x07;
 const RISING: u8 = 0x08;
 /// A DAC is powered while any of these `NRx2` bits is set.
@@ -45,7 +46,7 @@ impl Envelope {
     }
 
     pub(super) fn trigger(&mut self) {
-        self.volume = self.register >> 4;
+        self.volume = self.register >> VOLUME_SHIFT;
         self.timer = self.period();
     }
 

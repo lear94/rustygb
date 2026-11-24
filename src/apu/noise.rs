@@ -10,6 +10,7 @@ const LENGTH_MASK: u8 = 0x3F;
 const DIVISORS_T_CYCLES: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
 const DIVISOR_MASK: u8 = 0x07;
 const NARROW: u8 = 0x08;
+const SHIFT_POSITION: u32 = 4;
 /// Shifts above this stop the register clock.
 const MAX_SHIFT: u8 = 13;
 const LFSR_SEED: u16 = 0x7FFF;
@@ -51,7 +52,7 @@ impl Noise {
             return false;
         }
         self.timer = period(self.register);
-        if self.register >> 4 <= MAX_SHIFT {
+        if self.register >> SHIFT_POSITION <= MAX_SHIFT {
             self.shift();
         }
         true
@@ -119,7 +120,7 @@ fn period(register: u8) -> u32 {
         .get(usize::from(register & DIVISOR_MASK))
         .copied()
         .unwrap_or(0);
-    divisor << (register >> 4)
+    divisor << (register >> SHIFT_POSITION)
 }
 
 #[cfg(test)]

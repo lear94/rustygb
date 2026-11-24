@@ -5,6 +5,8 @@ use super::MAX_FREQUENCY;
 /// A zero period behaves as 8 in the timer.
 const ZERO_PERIOD: u8 = 8;
 const NEGATE: u8 = 0x08;
+const PERIOD_SHIFT: u32 = 4;
+const PERIOD_MASK: u8 = 0x07;
 const SHIFT_MASK: u8 = 0x07;
 
 /// What a sweep step does to its channel.
@@ -77,7 +79,7 @@ impl Sweep {
     }
 
     fn period(&self) -> u8 {
-        (self.register >> 4) & 7
+        (self.register >> PERIOD_SHIFT) & PERIOD_MASK
     }
 
     fn shift(&self) -> u8 {

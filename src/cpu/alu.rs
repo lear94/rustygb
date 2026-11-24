@@ -6,13 +6,17 @@ const NIBBLE: u8 = 0x0F;
 const HL_HALF_MASK: u16 = 0x0FFF;
 const BCD_LOW: u8 = 0x06;
 const BCD_HIGH: u8 = 0x60;
+const BCD_MAX_DIGIT: u8 = 9;
+const BCD_MAX: u8 = 0x99;
+/// Operations are encoded in three opcode bits.
+const OPERATION_MASK: u8 = 7;
 const SIGN_BIT: u8 = 0x80;
 
 impl Registers {
     /// Executes ADD/ADC/SUB/SBC/AND/XOR/OR/CP, numbered as in opcode bits 3-5.
     pub(super) fn alu(&mut self, operation: u8, val: u8) {
         let carry = u8::from(self.has_flag(FLAG_C));
-        match operation & 7 {
+        match operation & OPERATION_MASK {
             0 => self.add(val, 0),
             1 => self.add(val, carry),
             2 => self.a = self.subtract(val, 0),
@@ -90,7 +94,7 @@ impl Registers {
 
     /// Executes RLCA/RRCA/RLA/RRA/DAA/CPL/SCF/CCF, numbered as in opcode bits 3-5.
     pub(super) fn accumulator_op(&mut self, operation: u8) {
-        match operation & 7 {
+        match operation & OPERATION_MASK {
             rotation @ 0..=3 => {
                 self.a = self.shift(rotation, self.a);
                 // Unlike their CB-prefixed forms, these always clear Z.
@@ -110,7 +114,7 @@ impl Registers {
     pub(super) fn shift(&mut self, operation: u8, val: u8) -> u8 {
         let carry_in = u8::from(self.has_flag(FLAG_C));
         let (high, low) = (val & SIGN_BIT != 0, val & 1 != 0);
-        let (result, carry) = match operation & 7 {
+        let (result, carry) = match operation & OPERATION_MASK {
             0 => (val.rotate_left(1), high),
             1 => (val.rotate_right(1), low),
             2 => ((val << 1) | carry_in, high),
@@ -125,14 +129,14 @@ impl Registers {
     }
 
     pub(super) fn test_bit(&mut self, bit: u8, val: u8) {
-        let clear = val & (1 << (bit & 7)) == 0;
+        let clear = val & (1 << (bit & OPERATION_MASK)) == 0;
         self.f = (self.f & FLAG_C) | FLAG_H | flag_if(FLAG_Z, clear);
     }
 
     fn decimal_adjust(&mut self) {
         let subtracting = self.has_flag(FLAG_N);
-        let low = self.has_flag(FLAG_H) || (!subtracting && self.a & NIBBLE > 9);
-        let carry = self.has_flag(FLAG_C) || (!subtracting && self.a > 0x99);
+        let low = self.has_flag(FLAG_H) || (!subtracting && self.a & NIBBLE > BCD_MAX_DIGIT);
+        let carry = self.has_flag(FLAG_C) || (!subtracting && self.a > BCD_MAX);
         let adjustment = flag_if(BCD_LOW, low) | flag_if(BCD_HIGH, carry);
         self.a = if subtracting {
             self.a.wrapping_sub(adjustment)

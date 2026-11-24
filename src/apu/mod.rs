@@ -19,6 +19,7 @@ use square::Square;
 use std::collections::VecDeque;
 use wave::Wave;
 
+const SWEEP_STEPS: [u8; 2] = [2, 6];
 const SEQUENCER_STEP_MASK: u8 = 7;
 /// Largest 11-bit channel frequency.
 const MAX_FREQUENCY: u16 = 0x7FF;
@@ -35,6 +36,11 @@ const MIX_FULL_SCALE: i16 = FULL_SCALE * MAX_GAIN * 4;
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
 const WAVE_RAM_BASE: u16 = 0xFF30;
+/// Left side in the high nibble, right side in the low one.
+const SIDE_SHIFT: u32 = 4;
+const SIDE_VOLUME_MASK: u8 = 7;
+/// NR52 bits that do not exist read as 1.
+const STATUS_UNUSED: u8 = 0x70;
 const POWER: u8 = 0x80;
 const TRIGGER: u8 = 0x80;
 const LENGTH_ENABLE: u8 = 0x40;
@@ -313,7 +319,7 @@ impl Apu {
             .rev()
             .fold(0, |bits, &enabled| (bits << 1) | u8::from(enabled));
         let power = if self.powered { POWER } else { 0 };
-        power | 0x70 | channels
+        power | STATUS_UNUSED | channels
     }
 
     fn clock_sequencer(&mut self) {
@@ -328,7 +334,7 @@ impl Apu {
             self.wave.clock_length();
             self.noise.clock_length();
         }
-        if matches!(step, 2 | 6) {
+        if SWEEP_STEPS.contains(&step) {
             self.square_1.clock_sweep();
         }
         if step == SEQUENCER_STEP_MASK {
@@ -361,11 +367,11 @@ impl Apu {
     fn update_gains(&mut self) {
         let volumes = self.read(NR50);
         let panning = self.read(NR51);
-        let left_volume = i16::from((volumes >> 4) & 7) + 1;
-        let right_volume = i16::from(volumes & 7) + 1;
+        let left_volume = i16::from((volumes >> SIDE_SHIFT) & SIDE_VOLUME_MASK) + 1;
+        let right_volume = i16::from(volumes & SIDE_VOLUME_MASK) + 1;
         let mut sides = panning;
         for gain in &mut self.channel_gains {
-            let left = left_volume * i16::from((sides >> 4) & 1);
+            let left = left_volume * i16::from((sides >> SIDE_SHIFT) & 1);
             let right = right_volume * i16::from(sides & 1);
             *gain = left + right;
             sides >>= 1;

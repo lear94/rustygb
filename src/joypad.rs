@@ -13,6 +13,11 @@
 const LINES_MASK: u8 = 0x0F;
 const SELECT_DIRECTIONS: u8 = 0x10;
 const SELECT_ACTIONS: u8 = 0x20;
+/// Line of each button within its row.
+const LINE_A_RIGHT: u8 = 0x01;
+const LINE_B_LEFT: u8 = 0x02;
+const LINE_SELECT_UP: u8 = 0x04;
+const LINE_START_DOWN: u8 = 0x08;
 /// Bits that do not exist read as 1.
 const UNUSED_BITS: u8 = 0xC0;
 
@@ -66,14 +71,14 @@ impl Joypad {
         let before = self.read();
         let [actions, directions] = &mut self.rows;
         let (row, mask) = match button {
-            Button::A => (actions, 0x01),
-            Button::B => (actions, 0x02),
-            Button::Select => (actions, 0x04),
-            Button::Start => (actions, 0x08),
-            Button::Right => (directions, 0x01),
-            Button::Left => (directions, 0x02),
-            Button::Up => (directions, 0x04),
-            Button::Down => (directions, 0x08),
+            Button::A => (actions, LINE_A_RIGHT),
+            Button::B => (actions, LINE_B_LEFT),
+            Button::Select => (actions, LINE_SELECT_UP),
+            Button::Start => (actions, LINE_START_DOWN),
+            Button::Right => (directions, LINE_A_RIGHT),
+            Button::Left => (directions, LINE_B_LEFT),
+            Button::Up => (directions, LINE_SELECT_UP),
+            Button::Down => (directions, LINE_START_DOWN),
         };
         if pressed {
             *row &= !mask;

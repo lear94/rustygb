@@ -7,6 +7,10 @@ use super::registers::{R16, R8};
 use super::{Activity, Cpu, EnableDelay};
 use crate::bus::Motherboard;
 
+/// Widths and positions of the opcode fields.
+const FIELD_MASK: u8 = 7;
+const Y_SHIFT: u32 = 3;
+const X_SHIFT: u32 = 6;
 /// Base of the I/O and high-RAM page reached by LDH.
 const HIGH_PAGE: u8 = 0xFF;
 /// The encoding of LD (HL),(HL) is HALT instead.
@@ -16,8 +20,8 @@ const RST_MASK: u8 = 0x38;
 
 impl Cpu {
     pub(super) fn execute(&mut self, op: u8, bus: &mut Motherboard) {
-        let (y, z) = ((op >> 3) & 7, op & 7);
-        match op >> 6 {
+        let (y, z) = ((op >> Y_SHIFT) & FIELD_MASK, op & FIELD_MASK);
+        match op >> X_SHIFT {
             0 => self.execute_block_0(y, z, bus),
             1 if op == HALT_OPCODE => self.halt(bus),
             1 => {
@@ -111,8 +115,8 @@ impl Cpu {
     }
 
     fn execute_block_3(&mut self, op: u8, bus: &mut Motherboard) {
-        let y = (op >> 3) & 7;
-        match op & 7 {
+        let y = (op >> Y_SHIFT) & FIELD_MASK;
+        match op & FIELD_MASK {
             0 => self.execute_ret_cond_or_high(y, bus),
             1 => self.execute_pop_or_ret(y, bus),
             2 => self.execute_jump_cond_or_absolute(y, bus),
@@ -232,9 +236,9 @@ impl Cpu {
 
     fn execute_cb(&mut self, op: u8, bus: &mut Motherboard) {
         let operand = R8::from_bits(op);
-        let bit = (op >> 3) & 7;
+        let bit = (op >> Y_SHIFT) & FIELD_MASK;
         let val = self.load(operand, bus);
-        let result = match op >> 6 {
+        let result = match op >> X_SHIFT {
             0 => self.regs.shift(bit, val),
             1 => return self.regs.test_bit(bit, val),
             2 => val & !(1 << bit),

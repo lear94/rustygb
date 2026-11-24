@@ -10,6 +10,7 @@ const LENGTH_MAX: u16 = 64;
 const LENGTH_MASK: u8 = 0x3F;
 const DUTY_SHIFT: u32 = 6;
 const DUTY_STEP_MASK: u8 = 7;
+const FIRST_STEP_BIT: u8 = 0x80;
 /// Waveforms by duty selector, first step in the high bit.
 const DUTY_PATTERNS: [u8; 4] = [0b0000_0001, 0b1000_0001, 0b1000_0111, 0b0111_1110];
 
@@ -129,7 +130,7 @@ impl Square {
     }
 
     fn is_high(&self) -> bool {
-        self.waveform.rotate_left(u32::from(self.duty_step)) & 0x80 != 0
+        self.waveform.rotate_left(u32::from(self.duty_step)) & FIRST_STEP_BIT != 0
     }
 }
 

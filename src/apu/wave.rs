@@ -9,6 +9,10 @@ pub(super) const WAVE_RAM_LEN: usize = 16;
 /// Bytes a retrigger overwrites, and the alignment it copies from.
 const CORRUPTION_LEN: usize = 4;
 const POSITION_MASK: u8 = 31;
+const VOLUME_SHIFT: u32 = 5;
+const VOLUME_MASK: u8 = 3;
+const NIBBLE_BITS: u32 = 4;
+const NIBBLE_MASK: u8 = 0x0F;
 const DAC_ENABLE: u8 = 0x80;
 const T_CYCLES_PER_PERIOD_UNIT: u16 = 2;
 /// Extra delay before the first sample after a trigger.
@@ -81,7 +85,7 @@ impl Wave {
     }
 
     pub(super) fn write_volume(&mut self, val: u8) {
-        self.volume_code = (val >> 5) & 3;
+        self.volume_code = (val >> VOLUME_SHIFT) & VOLUME_MASK;
     }
 
     pub(super) fn write_frequency_low(&mut self, val: u8) {
@@ -175,9 +179,9 @@ impl Wave {
             .copied()
             .unwrap_or(0);
         if self.position & 1 == 0 {
-            byte >> 4
+            byte >> NIBBLE_BITS
         } else {
-            byte & 0x0F
+            byte & NIBBLE_MASK
         }
     }
 }

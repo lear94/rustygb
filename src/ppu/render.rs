@@ -14,6 +14,10 @@ const MAP_LOW: u16 = 0x9800;
 const MAP_HIGH: u16 = 0x9C00;
 const MAP_TILES_PER_ROW: u16 = 32;
 const TILE_SIZE_PX: u8 = 8;
+/// Two bit planes per row.
+const TILE_ROW_LEN: u16 = 2;
+const COLOR_BITS: u8 = 2;
+const COLOR_MASK: u8 = 3;
 const TILE_LEN: u16 = 16;
 /// Tile 0 of the signed addressing mode.
 const SIGNED_TILE_BASE: u16 = 0x9000;
@@ -269,7 +273,7 @@ impl Ppu {
     }
 
     fn tile_row(&self, tile_base: u16, line: u8) -> TileRow {
-        let addr = tile_base + u16::from(line) * 2;
+        let addr = tile_base + u16::from(line) * TILE_ROW_LEN;
         TileRow {
             low: self.vram_byte(addr),
             high: self.vram_byte(addr + 1),
@@ -296,7 +300,7 @@ impl Ppu {
 
 /// Applies a palette register to a color index.
 fn shade(palette: u8, color: u8) -> u8 {
-    (palette >> ((color & 3) * 2)) & 3
+    (palette >> ((color & COLOR_MASK) * COLOR_BITS)) & COLOR_MASK
 }
 
 #[cfg(test)]
