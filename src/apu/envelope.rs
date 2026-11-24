@@ -1,6 +1,9 @@
 //! Volume envelope shared by the square and noise channels.
 
+use super::FULL_SCALE;
+
 const MAX_VOLUME: u8 = 15;
+const AMPLITUDE_PER_VOLUME: i16 = FULL_SCALE / MAX_VOLUME as i16;
 /// A zero period behaves as 8 in the timer.
 const ZERO_PERIOD: u8 = 8;
 const PERIOD_MASK: u8 = 0x07;
@@ -16,7 +19,14 @@ pub(super) struct Envelope {
 }
 
 impl Envelope {
-    pub(super) fn write(&mut self, register: u8) {
+    /// Writes `NRx2`.
+    ///
+    /// Rewriting it while the channel plays nudges the volume ("zombie mode"), which sound
+    /// drivers use to change it without a retrigger.
+    pub(super) fn write(&mut self, register: u8, playing: bool) {
+        if playing {
+            self.nudge(register);
+        }
         self.register = register;
     }
 
@@ -29,9 +39,9 @@ impl Envelope {
         self.volume
     }
 
-    /// Volume as a fraction of full scale.
-    pub(super) fn amplitude(&self) -> f32 {
-        f32::from(self.volume) / f32::from(MAX_VOLUME)
+    /// Output amplitude, up to [`FULL_SCALE`].
+    pub(super) fn amplitude(&self) -> i16 {
+        i16::from(self.volume) * AMPLITUDE_PER_VOLUME
     }
 
     pub(super) fn trigger(&mut self) {
@@ -55,6 +65,19 @@ impl Envelope {
         };
     }
 
+    fn nudge(&mut self, register: u8) {
+        let step = match (self.register & PERIOD_MASK, self.register & RISING) {
+            (0, _) => 1,
+            (_, 0) => 2,
+            _ => 0,
+        };
+        self.volume = self.volume.wrapping_add(step);
+        if (self.register ^ register) & RISING != 0 {
+            self.volume = (MAX_VOLUME + 1).wrapping_sub(self.volume);
+        }
+        self.volume &= MAX_VOLUME;
+    }
+
     fn period(&self) -> u8 {
         match self.register & PERIOD_MASK {
             0 => ZERO_PERIOD,
@@ -69,7 +92,7 @@ mod tests {
 
     fn volume_after(register: u8, clocks: usize) -> u8 {
         let mut envelope = Envelope::default();
-        envelope.write(register);
+        envelope.write(register, false);
         envelope.trigger();
         (0..clocks).for_each(|_| envelope.clock());
         envelope.volume()
@@ -93,8 +116,25 @@ mod tests {
     fn dac_enabled_requires_volume_or_direction() {
         for (register, expected) in [(0x00, false), (0x07, false), (0x08, true), (0x10, true)] {
             let mut envelope = Envelope::default();
-            envelope.write(register);
+            envelope.write(register, false);
             assert_eq!(envelope.dac_enabled(), expected);
+        }
+    }
+
+    #[test]
+    fn write_while_playing_nudges_volume() {
+        for (before, after, expected) in [
+            (0x80, 0x80, 9),
+            (0xF8, 0xF8, 0),
+            (0x81, 0x81, 10),
+            (0x89, 0x89, 8),
+            (0x88, 0x80, 7),
+        ] {
+            let mut envelope = Envelope::default();
+            envelope.write(before, false);
+            envelope.trigger();
+            envelope.write(after, true);
+            assert_eq!(envelope.volume(), expected, "{before:#x} {after:#x}");
         }
     }
 }

@@ -16,10 +16,10 @@ fn apu() -> Apu {
 
 fn play_square_2(apu: &mut Apu, frequency: u16) {
     let [high, low] = frequency.to_be_bytes();
-    apu.write(0xFF16, 0x80);
-    apu.write(0xFF17, 0xF0);
-    apu.write(0xFF18, low);
-    apu.write(0xFF19, 0x80 | high);
+    apu.write(0xFF16, 0x80, false);
+    apu.write(0xFF17, 0xF0, false);
+    apu.write(0xFF18, low, false);
+    apu.write(0xFF19, 0x80 | high, false);
 }
 
 fn run(apu: &mut Apu, ticks: u32) -> Vec<f32> {
@@ -56,17 +56,17 @@ fn tick_square_pitch_is_exact() {
 #[test]
 fn mix_stays_within_unit_range() {
     let mut apu = apu();
-    apu.write(NR50, 0x77);
-    apu.write(NR51, 0xFF);
+    apu.write(NR50, 0x77, false);
+    apu.write(NR51, 0xFF, false);
     for base in [0xFF11, 0xFF16] {
-        apu.write(base + 1, 0xF0);
-        apu.write(base + 3, 0x87);
+        apu.write(base + 1, 0xF0, false);
+        apu.write(base + 3, 0x87, false);
     }
-    apu.write(0xFF1A, 0x80);
-    apu.write(0xFF1C, 0x20);
-    apu.write(0xFF1E, 0x87);
-    apu.write(0xFF21, 0xF0);
-    apu.write(0xFF23, 0x80);
+    apu.write(0xFF1A, 0x80, false);
+    apu.write(0xFF1C, 0x20, false);
+    apu.write(0xFF1E, 0x87, false);
+    apu.write(0xFF21, 0xF0, false);
+    apu.write(0xFF23, 0x80, false);
     assert_eq!(apu.read(NR52), 0xFF);
     let samples = run(&mut apu, M_CYCLES_PER_SECOND / 4);
     assert!(samples.iter().all(|s| s.abs() <= 1.0));
@@ -77,7 +77,7 @@ fn mix_stays_within_unit_range() {
 fn mix_unpanned_channel_is_silent() {
     let mut apu = apu();
     play_square_2(&mut apu, 0x700);
-    apu.write(NR51, 0x11);
+    apu.write(NR51, 0x11, false);
     assert!(run(&mut apu, 10_000).iter().all(|s| s.abs() < f32::EPSILON));
 }
 
@@ -99,7 +99,7 @@ fn drain_samples_queue_is_bounded() {
 fn read_masks_unreadable_bits() {
     let mut apu = apu();
     for (addr, &mask) in (REGISTER_BASE..NR52).zip(&READ_MASKS) {
-        apu.write(addr, 0);
+        apu.write(addr, 0, false);
         assert_eq!(apu.read(addr), mask, "{addr:#06x}");
     }
     assert_eq!(apu.read(0xFF27), 0xFF);
@@ -111,27 +111,27 @@ fn read_status_tracks_channels() {
     assert_eq!(apu.read(NR52), 0xF1);
     play_square_2(&mut apu, 0);
     assert_eq!(apu.read(NR52), 0xF3);
-    apu.write(0xFF17, 0);
+    apu.write(0xFF17, 0, false);
     assert_eq!(apu.read(NR52), 0xF1);
 }
 
 #[test]
 fn write_power_off_clears_registers_but_not_wave_ram() {
     let mut apu = apu();
-    apu.write(0xFF30, 0x12);
-    apu.write(NR52, 0);
+    apu.write(0xFF30, 0x12, false);
+    apu.write(NR52, 0, false);
     assert_eq!((apu.read(NR52), apu.read(NR50)), (0x70, 0));
-    apu.write(NR50, 0x77);
+    apu.write(NR50, 0x77, false);
     assert_eq!(apu.read(NR50), 0, "ignored while off");
     assert_eq!(apu.read(0xFF30), 0x12);
-    apu.write(NR52, 0x80);
+    apu.write(NR52, 0x80, false);
     assert_eq!(apu.read(NR52), 0xF0);
 }
 
 #[test]
 fn tick_powered_off_still_emits_silence() {
     let mut apu = apu();
-    apu.write(NR52, 0);
+    apu.write(NR52, 0, false);
     let samples = run(&mut apu, M_CYCLES_PER_SECOND / 8);
     assert_eq!(samples.len(), 6000);
     assert!(samples.iter().all(|s| s.abs() < f32::EPSILON));
@@ -140,11 +140,11 @@ fn tick_powered_off_still_emits_silence() {
 #[test]
 fn tick_sequencer_expires_length_at_256_hz() {
     let mut apu = apu();
-    apu.write(NR52, 0);
-    apu.write(NR52, 0x80);
-    apu.write(0xFF16, 0x3E);
-    apu.write(0xFF17, 0xF0);
-    apu.write(0xFF19, 0xC0);
+    apu.write(NR52, 0, false);
+    apu.write(NR52, 0x80, false);
+    apu.write(0xFF16, 0x3E, false);
+    apu.write(0xFF17, 0xF0, false);
+    apu.write(0xFF19, 0xC0, false);
     let two_clocks = SEQUENCER_PERIOD_TICKS * 3;
     tick(&mut apu, two_clocks - 1);
     assert_eq!(apu.read(NR52), 0xF2);
@@ -155,10 +155,10 @@ fn tick_sequencer_expires_length_at_256_hz() {
 #[test]
 fn tick_sequencer_clocks_envelope_at_64_hz() {
     let mut apu = apu();
-    apu.write(NR52, 0);
-    apu.write(NR52, 0x80);
-    apu.write(0xFF21, 0xF1);
-    apu.write(0xFF23, 0x80);
+    apu.write(NR52, 0, false);
+    apu.write(NR52, 0x80, false);
+    apu.write(0xFF21, 0xF1, false);
+    apu.write(0xFF23, 0x80, false);
     let cycle = SEQUENCER_PERIOD_TICKS * 8;
     tick(&mut apu, cycle - 1);
     assert_eq!(apu.noise.envelope.volume(), 15);
@@ -169,11 +169,11 @@ fn tick_sequencer_clocks_envelope_at_64_hz() {
 #[test]
 fn write_length_while_off_is_kept() {
     let mut apu = apu();
-    apu.write(NR52, 0);
-    apu.write(0xFF16, 0x3F);
-    apu.write(NR52, 0x80);
-    apu.write(0xFF17, 0xF0);
-    apu.write(0xFF19, 0xC0);
+    apu.write(NR52, 0, false);
+    apu.write(0xFF16, 0x3F, false);
+    apu.write(NR52, 0x80, false);
+    apu.write(0xFF17, 0xF0, false);
+    apu.write(0xFF19, 0xC0, false);
     tick(&mut apu, SEQUENCER_PERIOD_TICKS);
     assert_eq!(apu.read(NR52), 0xF0);
 }
@@ -182,12 +182,35 @@ fn write_length_while_off_is_kept() {
 fn write_power_off_stops_every_channel() {
     let mut apu = apu();
     play_square_2(&mut apu, 0);
-    apu.write(0xFF1A, 0x80);
-    apu.write(0xFF1E, 0x80);
-    apu.write(0xFF21, 0xF0);
-    apu.write(0xFF23, 0x80);
+    apu.write(0xFF1A, 0x80, false);
+    apu.write(0xFF1E, 0x80, false);
+    apu.write(0xFF21, 0xF0, false);
+    apu.write(0xFF23, 0x80, false);
     assert_eq!(apu.read(NR52), 0xFF);
-    apu.write(NR52, 0);
-    apu.write(NR52, 0x80);
+    apu.write(NR52, 0, false);
+    apu.write(NR52, 0x80, false);
     assert_eq!(apu.read(NR52), 0xF0);
+}
+
+#[test]
+fn write_power_on_mid_period_skips_first_clock() {
+    let mut apu = apu();
+    apu.write(NR52, 0, false);
+    apu.write(0xFF16, 0x3F, false);
+    apu.write(NR52, 0x80, true);
+    apu.write(0xFF17, 0xF0, false);
+    apu.write(0xFF19, 0xC0, false);
+    tick(&mut apu, SEQUENCER_PERIOD_TICKS);
+    assert_eq!(apu.read(NR52), 0xF2);
+    tick(&mut apu, SEQUENCER_PERIOD_TICKS);
+    assert_eq!(apu.read(NR52), 0xF0);
+}
+
+#[test]
+fn emit_ultrasonic_channel_does_not_alias() {
+    let mut apu = apu();
+    play_square_2(&mut apu, 0x7FF);
+    let samples = run(&mut apu, M_CYCLES_PER_SECOND / 10);
+    // 131 kHz is inaudible; point sampling turned it into a tone at 0.25.
+    assert!(samples[1..].iter().all(|sample| sample.abs() < 0.07));
 }

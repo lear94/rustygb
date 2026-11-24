@@ -13,6 +13,9 @@ const RTC_CODES: [u8; 2] = [0x0F, 0x10];
 const MBC2_RAM_LEN: usize = 512;
 const KIB: usize = 1024;
 
+const MBC3_MAX_ROM_LEN: usize = 2048 * KIB;
+const MBC30_RAM_CODE: u8 = 5;
+
 /// Multicarts are 1 MiB collections whose games start every 16 banks.
 const MULTICART_LEN: usize = 1024 * KIB;
 const MULTICART_GAME_OFFSET: usize = 0x4_0000;
@@ -42,8 +45,12 @@ impl Header {
         else {
             return Err(too_small);
         };
-        let mapper = Mapper::from_code(mapper_code, is_multicart(rom))
-            .ok_or(CartridgeError::UnsupportedMapper(mapper_code))?;
+        let mapper = Mapper::from_code(
+            mapper_code,
+            is_multicart(rom),
+            is_mbc30(rom.len(), ram_code),
+        )
+        .ok_or(CartridgeError::UnsupportedMapper(mapper_code))?;
         let ram_len = if MBC2_CODES.contains(&mapper_code) {
             MBC2_RAM_LEN
         } else {
@@ -56,6 +63,11 @@ impl Header {
             ram_len,
         })
     }
+}
+
+/// Only the MBC30 reaches beyond 2 MiB of ROM or 32 KiB of RAM.
+fn is_mbc30(rom_len: usize, ram_code: u8) -> bool {
+    rom_len > MBC3_MAX_ROM_LEN || ram_code == MBC30_RAM_CODE
 }
 
 fn is_multicart(rom: &[u8]) -> bool {
@@ -145,6 +157,17 @@ mod tests {
         assert!(is_multicart(&rom));
         rom.push(0);
         assert!(!is_multicart(&rom));
+    }
+
+    #[test]
+    fn is_mbc30_exceeds_either_mbc3_size() {
+        for (rom_len, ram_code, expected) in [
+            (MBC3_MAX_ROM_LEN, 3, false),
+            (MBC3_MAX_ROM_LEN + 1, 3, true),
+            (0, MBC30_RAM_CODE, true),
+        ] {
+            assert_eq!(is_mbc30(rom_len, ram_code), expected);
+        }
     }
 
     #[test]

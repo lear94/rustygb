@@ -43,12 +43,13 @@ impl Mapper {
     ///
     /// # Arguments
     /// * `is_multicart` - selects the MBC1 wiring of game collections.
-    pub(super) fn from_code(code: u8, is_multicart: bool) -> Option<Self> {
+    /// * `is_mbc30` - selects the larger MBC3.
+    pub(super) fn from_code(code: u8, is_multicart: bool, is_mbc30: bool) -> Option<Self> {
         match code {
             0x00 | 0x08 | 0x09 => Some(Self::RomOnly),
             0x01..=0x03 => Some(Self::Mbc1(Mbc1::new(is_multicart))),
             0x05 | 0x06 => Some(Self::Mbc2(Mbc2::new())),
-            0x0F..=0x13 => Some(Self::Mbc3(Mbc3::new())),
+            0x0F..=0x13 => Some(Self::Mbc3(Mbc3::new(is_mbc30))),
             0x19..=0x1B => Some(Self::Mbc5(Mbc5::new(false))),
             0x1C..=0x1E => Some(Self::Mbc5(Mbc5::new(true))),
             _ => None,
@@ -114,13 +115,13 @@ mod tests {
     #[test]
     fn from_code_unknown_is_none() {
         for code in [0x04, 0x07, 0x0B, 0x14, 0x1F, 0xFF] {
-            assert!(Mapper::from_code(code, false).is_none());
+            assert!(Mapper::from_code(code, false, false).is_none());
         }
     }
 
     #[test]
     fn from_code_rom_only_is_fixed() {
-        let mut mapper = Mapper::from_code(0x08, false).expect("ROM+RAM");
+        let mut mapper = Mapper::from_code(0x08, false, false).expect("ROM+RAM");
         mapper.write_register(0x2000, 7);
         assert_eq!(
             (mapper.fixed_rom_bank(), mapper.switchable_rom_bank()),

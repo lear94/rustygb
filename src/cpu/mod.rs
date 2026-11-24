@@ -89,15 +89,18 @@ impl Cpu {
             Activity::Running | Activity::Halted => {}
         }
         // Hardware samples interrupts during the opcode fetch, then discards the opcode.
+        let pending_before = bus.pending_interrupts();
         let op = self.read(self.regs.pc, bus);
-        let pending = bus.pending_interrupts() != 0;
+        let pending_after = bus.pending_interrupts();
         if self.activity == Activity::Halted {
-            // HALT keeps fetching, so the cycle that wakes it is already the fetch.
-            if !pending {
+            // HALT keeps fetching, so the cycle that wakes it is already the fetch, but it
+            // samples earlier in it than a running CPU does.
+            if pending_before | (pending_after & bus.early_requests()) == 0 {
                 return;
             }
             self.activity = Activity::Running;
         }
+        let pending = pending_after != 0;
         if self.ime && pending {
             return self.dispatch_interrupt(bus);
         }

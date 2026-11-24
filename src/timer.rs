@@ -99,6 +99,11 @@ impl Timer {
         self.change_input(0, self.tac);
     }
 
+    /// Level of the divider bit whose fall clocks the audio sequencer.
+    pub(crate) fn audio_clock_level(&self) -> bool {
+        self.divider & AUDIO_CLOCK_BIT != 0
+    }
+
     /// Reads a timer register; other addresses are open bus.
     #[must_use]
     pub fn read(&self, addr: u16) -> u8 {

@@ -39,18 +39,22 @@ impl Noise {
     }
 
     /// Advances one M-cycle; the shortest period spans two.
-    pub(super) fn tick(&mut self) {
+    ///
+    /// # Returns
+    /// Whether the output may have changed.
+    pub(super) fn tick(&mut self) -> bool {
         if !self.enabled {
-            return;
+            return false;
         }
         self.timer = self.timer.saturating_sub(u32::from(T_CYCLES_PER_M_CYCLE));
         if self.timer != 0 {
-            return;
+            return false;
         }
         self.timer = period(self.register);
         if self.register >> 4 <= MAX_SHIFT {
             self.shift();
         }
+        true
     }
 
     pub(super) fn write_length(&mut self, val: u8) {
@@ -58,7 +62,7 @@ impl Noise {
     }
 
     pub(super) fn write_envelope(&mut self, val: u8) {
-        self.envelope.write(val);
+        self.envelope.write(val, self.enabled);
         self.enabled &= self.envelope.dac_enabled();
     }
 
@@ -88,10 +92,10 @@ impl Noise {
         }
     }
 
-    /// Current output in `[-1.0, 1.0]`.
-    pub(super) fn sample(&self) -> f32 {
+    /// Current output, up to [`super::FULL_SCALE`] either way.
+    pub(super) fn output(&self) -> i16 {
         if !self.enabled {
-            return 0.0;
+            return 0;
         }
         let amplitude = self.envelope.amplitude();
         if self.lfsr & 1 == 0 {
@@ -120,6 +124,7 @@ fn period(register: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::FULL_SCALE;
     use super::*;
 
     const TRIGGER: Control = Control {
@@ -160,7 +165,9 @@ mod tests {
     fn tick_shifts_once_per_period() {
         for (register, m_cycles) in [(0x00, 2), (0x01, 4), (0x10, 4), (0x27, 112)] {
             let mut noise = playing(register);
-            (0..m_cycles - 1).for_each(|_| noise.tick());
+            (0..m_cycles - 1).for_each(|_| {
+                noise.tick();
+            });
             assert_eq!(noise.lfsr, LFSR_SEED);
             noise.tick();
             assert_ne!(noise.lfsr, LFSR_SEED, "{register:#x}");
@@ -170,7 +177,9 @@ mod tests {
     #[test]
     fn tick_shift_above_limit_is_frozen() {
         let mut noise = playing(0xE0);
-        (0..100_000).for_each(|_| noise.tick());
+        (0..100_000).for_each(|_| {
+            noise.tick();
+        });
         assert_eq!(noise.lfsr, LFSR_SEED);
     }
 
@@ -179,7 +188,7 @@ mod tests {
         let mut noise = playing(0);
         noise.write_envelope(0);
         assert!(!noise.enabled);
-        assert_eq!(noise.sample().to_bits(), 0.0f32.to_bits());
+        assert_eq!(noise.output(), 0);
     }
 
     #[test]
@@ -196,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn sample_is_full_scale_at_max_volume() {
-        assert_eq!(playing(0).sample().to_bits(), (-1.0f32).to_bits());
+    fn output_is_full_scale_at_max_volume() {
+        assert_eq!(playing(0).output(), -FULL_SCALE);
     }
 }

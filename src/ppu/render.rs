@@ -83,13 +83,18 @@ impl Ppu {
 
     /// Dots the current line extends mode 3, on the M-cycle grid.
     pub(super) fn drawing_penalty(&self) -> u16 {
-        let scroll = u16::from(self.scx % TILE_SIZE_PX).next_multiple_of(DOTS_PER_TICK);
+        let scroll = u16::from(self.scx % TILE_SIZE_PX);
         let sprites = if self.lcdc & LCDC_SPRITES_ON != 0 {
             self.sprite_penalty()
         } else {
             0
         };
-        scroll + (sprites - sprites % DOTS_PER_TICK)
+        if sprites == 0 {
+            scroll.next_multiple_of(DOTS_PER_TICK)
+        } else {
+            let total = scroll + sprites;
+            total - total % DOTS_PER_TICK
+        }
     }
 
     /// Each sprite costs its fetch plus, once per background tile, the wait for that
@@ -119,9 +124,12 @@ impl Ppu {
     pub(super) fn render_line(&mut self) {
         self.window_triggered |= self.ly == self.wy;
         let mut colors = [0; SCREEN_WIDTH];
+        let window_visible = self.window_visible();
         if self.lcdc & LCDC_BG_ON != 0 {
-            self.draw_background(&mut colors);
+            self.draw_background(&mut colors, window_visible);
         }
+        // The window advances even while its pixels are blanked.
+        self.window_line += u8::from(window_visible);
         let mut shades = colors.map(|color| shade(self.bgp, color));
         if self.lcdc & LCDC_SPRITES_ON != 0 {
             self.draw_sprites(&colors, &mut shades);
@@ -137,11 +145,11 @@ impl Ppu {
         }
     }
 
-    fn draw_background(&mut self, colors: &mut Line) {
+    fn draw_background(&self, colors: &mut Line, window_visible: bool) {
         let map = self.map_base(LCDC_BG_MAP);
         self.draw_tiles(colors, map, self.scx, self.ly.wrapping_add(self.scy));
 
-        if !self.window_visible() {
+        if !window_visible {
             return;
         }
         let start = usize::from(self.wx.saturating_sub(WINDOW_X_OFFSET));
@@ -150,7 +158,6 @@ impl Ppu {
             let map = self.map_base(LCDC_WINDOW_MAP);
             self.draw_tiles(visible, map, hidden, self.window_line);
         }
-        self.window_line += 1;
     }
 
     fn window_visible(&self) -> bool {
@@ -529,5 +536,13 @@ mod tests {
             }
             assert_eq!(ppu.drawing_penalty(), expected, "{scx} {sprites:?}");
         }
+    }
+
+    #[test]
+    fn render_line_blanked_window_still_advances() {
+        let mut ppu = ppu();
+        ppu.lcdc = 0xF0;
+        ppu.render_line();
+        assert_eq!(ppu.window_line, 1);
     }
 }

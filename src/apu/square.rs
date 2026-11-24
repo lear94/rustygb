@@ -41,15 +41,20 @@ impl Square {
     }
 
     /// Advances one M-cycle, which is also the shortest possible step.
-    pub(super) fn tick(&mut self) {
+    ///
+    /// # Returns
+    /// Whether the output may have changed.
+    pub(super) fn tick(&mut self) -> bool {
         if !self.enabled {
-            return;
+            return false;
         }
         self.timer = self.timer.saturating_sub(T_CYCLES_PER_M_CYCLE);
         if self.timer == 0 {
             self.timer = period(self.frequency);
             self.duty_step = (self.duty_step + 1) & DUTY_STEP_MASK;
+            return true;
         }
+        false
     }
 
     pub(super) fn write_sweep(&mut self, val: u8) {
@@ -67,7 +72,7 @@ impl Square {
     }
 
     pub(super) fn write_envelope(&mut self, val: u8) {
-        self.envelope.write(val);
+        self.envelope.write(val, self.enabled);
         self.enabled &= self.envelope.dac_enabled();
     }
 
@@ -108,10 +113,10 @@ impl Square {
         }
     }
 
-    /// Current output in `[-1.0, 1.0]`.
-    pub(super) fn sample(&self) -> f32 {
+    /// Current output, up to [`super::FULL_SCALE`] either way.
+    pub(super) fn output(&self) -> i16 {
         if !self.enabled {
-            return 0.0;
+            return 0;
         }
         let amplitude = self.envelope.amplitude();
         if self.is_high() {
@@ -136,6 +141,7 @@ fn period(frequency: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::FULL_SCALE;
     use super::*;
 
     fn playing(frequency: u16) -> Square {
@@ -159,7 +165,9 @@ mod tests {
             let mut square = playing(frequency);
             let m_cycles = u32::from(2048 - frequency) * 8;
             let before = square.duty_step;
-            (0..m_cycles - 1).for_each(|_| square.tick());
+            (0..m_cycles - 1).for_each(|_| {
+                square.tick();
+            });
             assert_ne!(square.duty_step, before);
             square.tick();
             assert_eq!(square.duty_step, before);
@@ -187,7 +195,7 @@ mod tests {
         assert!(square.enabled);
         square.write_envelope(0);
         assert!(!square.enabled);
-        assert_eq!(square.sample().to_bits(), 0.0f32.to_bits());
+        assert_eq!(square.output(), 0);
     }
 
     #[test]
@@ -220,11 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn sample_amplitude_is_full_scale_at_max_volume() {
+    fn output_amplitude_is_full_scale_at_max_volume() {
         let mut square = playing(0x7FF);
         for _ in 0..8 {
             square.tick();
-            assert_eq!(square.sample().abs().to_bits(), 1.0f32.to_bits());
+            assert_eq!(square.output().abs(), FULL_SCALE);
         }
     }
 }

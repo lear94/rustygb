@@ -25,6 +25,10 @@ const DOTS_PER_LINE: u16 = 456;
 const LCD_ON_FIRST_DOT: u16 = 4;
 /// Dot at which a line enters its first mode.
 const MODE_START_DOT: u16 = 4;
+/// Dot of the last line at which the boot ROM hands over.
+const POST_BOOT_DOT: u16 = 396;
+/// Dot at which line 0 ends its OAM pulse and line 153 its LYC match.
+const PULSE_END_DOT: u16 = 8;
 /// Dot of the last line at which LYC sees line 0.
 const LAST_LINE_WRAP_DOT: u16 = 12;
 /// Last dot sampled as mode 2 and first as mode 0, on the M-cycle grid.
@@ -38,6 +42,9 @@ const VRAM_BASE: u16 = 0x8000;
 const OAM_LEN: usize = 160;
 const OAM_BASE: u16 = 0xFE00;
 
+const POST_BOOT_LCDC: u8 = 0x91;
+const POST_BOOT_BGP: u8 = 0xFC;
+const POST_BOOT_OBP: u8 = 0xFF;
 const LCDC_ON: u8 = 0x80;
 const STAT_LYC_SOURCE: u8 = 0x40;
 const STAT_OAM_SOURCE: u8 = 0x20;
@@ -66,8 +73,8 @@ impl Mode {
         match self {
             Self::HBlank => STAT_HBLANK_SOURCE,
             Self::VBlank => STAT_VBLANK_SOURCE,
-            Self::OamScan => STAT_OAM_SOURCE,
-            Self::Drawing => 0,
+            // The OAM source is a pulse at the line start, not the whole scan.
+            Self::OamScan | Self::Drawing => 0,
         }
     }
 }
@@ -116,6 +123,8 @@ pub struct Ppu {
     mode: Mode,
     /// The first line after enabling the LCD has no OAM scan and reports mode 0 instead.
     skip_oam_scan: bool,
+    /// The OAM source is being pulsed.
+    oam_pulse: bool,
     /// OR of all STAT sources; only its rising edge interrupts.
     stat_line: bool,
     requested: u8,
@@ -131,27 +140,28 @@ impl Ppu {
             skip_frame: false,
             vram: [0; VRAM_LEN],
             oam: [0; OAM_LEN],
-            lcdc: 0x91,
+            lcdc: POST_BOOT_LCDC,
             stat_sources: 0,
             scy: 0,
             scx: 0,
-            line: 0,
+            line: LAST_LINE,
             ly: 0,
             lyc: 0,
             compared_line: Some(0),
             coincidence: true,
             wy: 0,
             wx: 0,
-            bgp: 0xFC,
-            obp0: 0xFF,
-            obp1: 0xFF,
-            dots: 0,
-            next_event_dot: MODE_START_DOT,
+            bgp: POST_BOOT_BGP,
+            obp0: POST_BOOT_OBP,
+            obp1: POST_BOOT_OBP,
+            dots: POST_BOOT_DOT,
+            next_event_dot: DOTS_PER_LINE,
             window_triggered: false,
             window_line: 0,
             drawing_end_dot: DRAWING_END_DOT,
-            mode: Mode::OamScan,
+            mode: Mode::VBlank,
             skip_oam_scan: false,
+            oam_pulse: false,
             stat_line: false,
             requested: 0,
         }
@@ -207,6 +217,11 @@ impl Ppu {
         self.blank_frame();
     }
 
+    /// Returns whether the last tick changed the scanline.
+    pub(crate) fn at_line_start(&self) -> bool {
+        self.dots == 0
+    }
+
     /// Runs the state change due at this dot and schedules the next one. Most ticks have
     /// none, which keeps [`Self::tick`] to one comparison.
     fn handle_event(&mut self) {
@@ -214,6 +229,8 @@ impl Ppu {
             self.start_line();
         } else if self.dots == MODE_START_DOT {
             self.start_mode();
+        } else if self.dots == PULSE_END_DOT {
+            self.end_pulse();
         } else if self.line < FIRST_VBLANK_LINE {
             self.update_visible_mode();
         } else if self.line == LAST_LINE && self.dots == LAST_LINE_WRAP_DOT {
@@ -226,6 +243,8 @@ impl Ppu {
         let visible = self.line < FIRST_VBLANK_LINE;
         if self.dots < MODE_START_DOT {
             MODE_START_DOT
+        } else if self.dots < PULSE_END_DOT && matches!(self.line, 0 | LAST_LINE) {
+            PULSE_END_DOT
         } else if self.line == LAST_LINE && self.dots < LAST_LINE_WRAP_DOT {
             LAST_LINE_WRAP_DOT
         } else if visible && self.dots <= OAM_SCAN_LAST_DOT {
@@ -246,12 +265,24 @@ impl Ppu {
         };
         self.ly = self.line;
         if self.line != 0 {
+            self.oam_pulse = self.line <= FIRST_VBLANK_LINE;
+            self.compare_lyc(None);
+        }
+    }
+
+    /// Ends what the first and last lines hold for one more M-cycle than the others.
+    fn end_pulse(&mut self) {
+        if self.line == 0 {
+            self.oam_pulse = false;
+            self.update_stat_line();
+        } else {
             self.compare_lyc(None);
         }
     }
 
     /// Enters the first mode of the line, one M-cycle after LY changes.
     fn start_mode(&mut self) {
+        self.oam_pulse = self.line == 0 && !self.skip_oam_scan;
         if self.line == FIRST_VBLANK_LINE {
             self.enter_vblank();
         } else if self.line < FIRST_VBLANK_LINE && !self.skip_oam_scan {
@@ -267,9 +298,6 @@ impl Ppu {
 
     fn enter_vblank(&mut self) {
         self.requested |= IRQ_VBLANK;
-        // The OAM source also fires on this line, although nothing is scanned.
-        self.mode = Mode::OamScan;
-        self.update_stat_line();
         self.mode = Mode::VBlank;
         self.window_line = 0;
         self.window_triggered = false;
@@ -317,8 +345,9 @@ impl Ppu {
         } else {
             0
         };
+        let oam_source = if self.oam_pulse { STAT_OAM_SOURCE } else { 0 };
         let lyc_source = if self.coincidence { STAT_LYC_SOURCE } else { 0 };
-        let level = self.stat_sources & (mode_source | lyc_source) != 0;
+        let level = self.stat_sources & (mode_source | oam_source | lyc_source) != 0;
         if level && !self.stat_line {
             self.requested |= IRQ_STAT;
         }

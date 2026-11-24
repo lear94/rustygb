@@ -49,6 +49,8 @@ pub struct Motherboard {
     dma: OamDma,
     wram: [u8; WRAM_LEN],
     hram: [u8; HRAM_LEN],
+    /// Interrupts raised early enough in the last M-cycle for HALT to see them.
+    early_requests: u8,
     ie: u8,
     if_reg: u8,
 }
@@ -67,6 +69,7 @@ impl Motherboard {
             dma: OamDma::new(),
             wram: [0; WRAM_LEN],
             hram: [0; HRAM_LEN],
+            early_requests: 0,
             ie: 0,
             if_reg: POST_BOOT_IF,
         }
@@ -83,10 +86,16 @@ impl Motherboard {
             self.if_reg |= IRQ_SERIAL;
         }
         if let Some(copy) = self.dma.tick() {
-            let byte = self.read_unblocked(copy.source);
+            // The copier is not subject to the lock the CPU sees while drawing.
+            let byte = match copy.source {
+                VRAM_START..=VRAM_END => self.ppu.vram_byte(copy.source),
+                source => self.read_unblocked(source),
+            };
             self.ppu.write_oam(usize::from(copy.oam_idx), byte);
         }
-        self.if_reg |= self.ppu.tick();
+        let video = self.ppu.tick();
+        self.if_reg |= video;
+        self.early_requests = if self.ppu.at_line_start() { 0 } else { video };
         self.apu.tick(tick.audio_clock);
 
         if self.joypad.take_interrupt() {
@@ -96,6 +105,8 @@ impl Motherboard {
 
     /// Lets one M-cycle of host time pass while STOP holds the system clock.
     pub(crate) fn tick_stopped(&mut self) {
+        // The clock crystal of the cartridge is independent of the console.
+        self.cartridge.tick();
         self.apu.tick_stopped();
     }
 
@@ -108,6 +119,11 @@ impl Motherboard {
     #[must_use]
     pub fn pending_interrupts(&self) -> u8 {
         self.ie & self.if_reg & IRQ_MASK
+    }
+
+    /// Interrupts raised early enough in the last M-cycle for HALT to see them.
+    pub(crate) fn early_requests(&self) -> u8 {
+        self.early_requests
     }
 
     /// Clears the highest-priority pending interrupt and returns its bit number.
@@ -190,7 +206,7 @@ impl Motherboard {
 
     fn write_high(&mut self, addr: u16, val: u8) {
         match addr {
-            NR10..=WAVE_END => self.apu.write(addr, val),
+            NR10..=WAVE_END => self.apu.write(addr, val, self.timer.audio_clock_level()),
             DMA => self.dma.start(val),
             LCDC..=WX => self.ppu.write(addr, val),
             HRAM_START..=HRAM_END => {

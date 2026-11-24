@@ -129,7 +129,7 @@ impl Ppu {
         self.mode == Mode::OamScan && self.dots == OAM_SCAN_LAST_DOT
     }
 
-    pub(super) fn vram_byte(&self, addr: u16) -> u8 {
+    pub(crate) fn vram_byte(&self, addr: u16) -> u8 {
         self.vram
             .get(usize::from(addr.wrapping_sub(VRAM_BASE)))
             .copied()

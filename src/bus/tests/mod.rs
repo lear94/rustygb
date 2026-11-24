@@ -103,3 +103,29 @@ fn tick_stopped_produces_silence() {
         .iter()
         .all(|sample| sample.abs() < f32::EPSILON));
 }
+
+#[test]
+fn tick_dma_from_vram_ignores_drawing_lock() {
+    let mut bus = bus();
+    for offset in 0..160 {
+        bus.write_byte(0x8000 + offset, 0x5A);
+    }
+    bus.write_byte(0xFF40, 0x80);
+    bus.write_byte(0xFF46, 0x80);
+    (0..400).for_each(|_| bus.tick());
+    bus.write_byte(0xFF40, 0);
+    assert!((0..160).all(|offset| bus.read_byte(0xFE00 + offset) == 0x5A));
+}
+
+#[test]
+fn tick_stopped_advances_cartridge_clock() {
+    let mut rom = vec![0; 0x8000];
+    rom[0x147] = 0x10;
+    let cartridge = Cartridge::from_bytes(rom, None).expect("clock cartridge");
+    let mut bus = Motherboard::new(cartridge, 0);
+    (0..1_048_576).for_each(|_| bus.tick_stopped());
+    for (addr, val) in [(0x0000, 0x0A), (0x4000, 0x08), (0x6000, 0), (0x6000, 1)] {
+        bus.write_byte(addr, val);
+    }
+    assert_eq!(bus.read_byte(0xA000), 1);
+}

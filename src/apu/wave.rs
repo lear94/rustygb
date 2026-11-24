@@ -13,8 +13,8 @@ const DAC_ENABLE: u8 = 0x80;
 const T_CYCLES_PER_PERIOD_UNIT: u16 = 2;
 /// Extra delay before the first sample after a trigger.
 const TRIGGER_DELAY_T_CYCLES: u16 = 6;
-/// Midpoint of the 4-bit range, so the output is centred.
-const SAMPLE_MIDPOINT: f32 = 7.5;
+/// Largest 4-bit sample.
+const SAMPLE_MAX: i16 = 15;
 
 #[derive(Debug)]
 pub(super) struct Wave {
@@ -48,10 +48,14 @@ impl Wave {
     }
 
     /// Advances one M-cycle; the shortest period fits twice in it.
-    pub(super) fn tick(&mut self) {
+    ///
+    /// # Returns
+    /// Whether the output may have changed.
+    pub(super) fn tick(&mut self) -> bool {
         if !self.enabled {
-            return;
+            return false;
         }
+        let mut changed = false;
         let mut elapsed = T_CYCLES_PER_M_CYCLE;
         self.just_read = false;
         while elapsed >= self.timer {
@@ -59,10 +63,12 @@ impl Wave {
             self.timer = period(self.frequency);
             self.position = (self.position + 1) & POSITION_MASK;
             self.current = self.nibble();
+            changed = true;
             // CPU accesses land on the last T-cycles of the M-cycle.
             self.just_read = elapsed == 0;
         }
         self.timer -= elapsed;
+        changed
     }
 
     pub(super) fn write_dac(&mut self, val: u8) {
@@ -139,18 +145,19 @@ impl Wave {
         }
     }
 
-    /// Current output in `[-1.0, 1.0]`.
-    pub(super) fn sample(&self) -> f32 {
+    /// Current output, up to [`super::FULL_SCALE`] either way.
+    pub(super) fn output(&self) -> i16 {
         if !self.enabled {
-            return 0.0;
+            return 0;
         }
         let scale = match self.volume_code {
-            0 => 0.0,
-            1 => 1.0,
-            2 => 0.5,
-            _ => 0.25,
+            0 => 0,
+            1 => 4,
+            2 => 2,
+            _ => 1,
         };
-        (f32::from(self.current) / SAMPLE_MIDPOINT - 1.0) * scale
+        // Twice the sample minus its maximum: centred on zero.
+        (i16::from(self.current) * 2 - SAMPLE_MAX) * scale
     }
 
     fn ram_idx(&self, idx: usize) -> Option<usize> {
@@ -220,19 +227,21 @@ mod tests {
     fn tick_shortest_period_steps_twice() {
         let mut wave = playing();
         wave.write_frequency_low(0xFF);
-        (0..8).for_each(|_| wave.tick());
+        (0..8).for_each(|_| {
+            wave.tick();
+        });
         let before = wave.position;
         wave.tick();
         assert_eq!(wave.position, (before + 2) & POSITION_MASK);
     }
 
     #[test]
-    fn sample_is_scaled_by_volume_code() {
-        for (register, expected) in [(0x00, 0.0f32), (0x20, 1.0), (0x40, 0.5), (0x60, 0.25)] {
+    fn output_is_scaled_by_volume_code() {
+        for (register, expected) in [(0x00, 0), (0x20, 60), (0x40, 30), (0x60, 15)] {
             let mut wave = playing();
             wave.current = 15;
             wave.write_volume(register);
-            assert_eq!(wave.sample().to_bits(), expected.to_bits());
+            assert_eq!(wave.output(), expected);
         }
     }
 

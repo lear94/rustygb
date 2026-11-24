@@ -24,10 +24,13 @@ const SEQUENCER_STEP_MASK: u8 = 7;
 const MAX_FREQUENCY: u16 = 0x7FF;
 /// Queue bound (~170 ms at 48 kHz): a slow host loses the oldest samples.
 const MAX_BUFFERED_SAMPLES: usize = 8192;
-/// Keeps the sum of four full-scale channels within `[-1.0, 1.0]`.
-const CHANNEL_GAIN: f32 = 0.25;
+/// Largest channel output: divisible by every envelope volume and wave scale.
+const FULL_SCALE: i16 = 60;
 /// Two sides with volumes 1-8 each.
-const MAX_SIDE_GAIN: f32 = 16.0;
+const MAX_GAIN: i16 = 16;
+const CHANNEL_COUNT: usize = 4;
+/// Full-scale channels at full gain.
+const MIX_FULL_SCALE: i16 = FULL_SCALE * MAX_GAIN * 4;
 
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
@@ -74,9 +77,16 @@ pub struct Apu {
     powered: bool,
     /// Next sequencer step.
     sequencer_step: u8,
+    skip_clock: bool,
     sample_rate_hz: u32,
     /// Fractional sample position, in units of 1 / [`M_CYCLES_PER_SECOND`].
     sample_phase: u32,
+    channel_gains: [i16; CHANNEL_COUNT],
+    /// Current mixed output.
+    level: f32,
+    /// Sum and count of the levels since the last sample.
+    level_sum: f32,
+    level_count: f32,
     samples: VecDeque<f32>,
 }
 
@@ -95,12 +105,17 @@ impl Apu {
             registers: [0; REGISTER_COUNT],
             powered: true,
             sequencer_step: 0,
+            skip_clock: false,
             sample_rate_hz: capped_rate(sample_rate_hz),
             sample_phase: 0,
+            channel_gains: [0; CHANNEL_COUNT],
+            level: 0.0,
+            level_sum: 0.0,
+            level_count: 0.0,
             samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
         };
         for (addr, val) in POST_BOOT_WRITES {
-            apu.write(addr, val);
+            apu.write(addr, val, false);
         }
         apu.square_1.enabled = true;
         apu
@@ -135,24 +150,34 @@ impl Apu {
     /// * `sequencer_clock` - the divider clocks the 512 Hz sequencer.
     pub fn tick(&mut self, sequencer_clock: bool) {
         if self.powered {
-            self.square_1.tick();
-            self.square_2.tick();
-            self.wave.tick();
-            self.noise.tick();
+            // Non-short-circuiting: every channel advances.
+            let changed =
+                self.square_1.tick() | self.square_2.tick() | self.wave.tick() | self.noise.tick();
             if sequencer_clock {
                 self.clock_sequencer();
             }
+            if changed | sequencer_clock {
+                self.level = self.mix();
+            }
         }
-        if self.sample_due() {
-            let sample = self.mix();
-            self.emit(sample);
-        }
+        self.accumulate(self.level);
     }
 
     /// Lets one M-cycle pass with the system clock off: time flows, silently.
     pub(crate) fn tick_stopped(&mut self) {
+        self.accumulate(0.0);
+    }
+
+    /// Averages the output over each sample, or channels above the audible range would
+    /// alias into it.
+    fn accumulate(&mut self, level: f32) {
+        self.level_sum += level;
+        self.level_count += 1.0;
         if self.sample_due() {
-            self.emit(0.0);
+            let sample = self.level_sum / self.level_count;
+            self.level_sum = 0.0;
+            self.level_count = 0.0;
+            self.emit(sample);
         }
     }
 
@@ -182,10 +207,13 @@ impl Apu {
     }
 
     /// Writes an APU register or wave RAM; other addresses are ignored.
-    pub fn write(&mut self, addr: u16, val: u8) {
+    ///
+    /// # Arguments
+    /// * `clock_high` - level of the divider bit clocking the sequencer.
+    pub fn write(&mut self, addr: u16, val: u8, clock_high: bool) {
         match addr {
             WAVE_START..=WAVE_END => self.wave.write_ram(offset(addr, WAVE_RAM_BASE), val),
-            NR52 => self.write_power(val),
+            NR52 => self.write_power(val, clock_high),
             _ => {
                 self.write_length(addr, val);
                 if self.powered {
@@ -193,6 +221,8 @@ impl Apu {
                 }
             }
         }
+        self.update_gains();
+        self.level = self.mix();
     }
 
     /// DMG length counters stay writable while powered off.
@@ -238,7 +268,7 @@ impl Apu {
         }
     }
 
-    fn write_power(&mut self, val: u8) {
+    fn write_power(&mut self, val: u8, clock_high: bool) {
         let powered = val & POWER != 0;
         if self.powered && !powered {
             for addr in REGISTER_BASE..NR52 {
@@ -256,6 +286,8 @@ impl Apu {
         }
         if !self.powered && powered {
             self.sequencer_step = 0;
+            // Powering on halfway through a period swallows its edge.
+            self.skip_clock = clock_high;
         }
         self.powered = powered;
     }
@@ -285,6 +317,9 @@ impl Apu {
     }
 
     fn clock_sequencer(&mut self) {
+        if std::mem::take(&mut self.skip_clock) {
+            return;
+        }
         let step = self.sequencer_step;
         self.sequencer_step = (step + 1) & SEQUENCER_STEP_MASK;
         if step & 1 == 0 {
@@ -311,26 +346,36 @@ impl Apu {
         self.samples.push_back(sample);
     }
 
+    /// Mixes the channels in integers: this runs whenever an output changes, up to every
+    /// M-cycle, and only the result needs to be a float.
     fn mix(&self) -> f32 {
+        let outputs = [
+            self.square_1.output(),
+            self.square_2.output(),
+            self.wave.output(),
+            self.noise.output(),
+        ];
+        let sum: i16 = outputs
+            .iter()
+            .zip(self.channel_gains)
+            .map(|(output, gain)| output * gain)
+            .sum();
+        f32::from(sum) / f32::from(MIX_FULL_SCALE)
+    }
+
+    /// Recomputes the channel gains from the master volumes and panning.
+    fn update_gains(&mut self) {
         let volumes = self.read(NR50);
         let panning = self.read(NR51);
-        let left_volume = ((volumes >> 4) & 7) + 1;
-        let right_volume = (volumes & 7) + 1;
-        let outputs = [
-            self.square_1.sample(),
-            self.square_2.sample(),
-            self.wave.sample(),
-            self.noise.sample(),
-        ];
+        let left_volume = i16::from((volumes >> 4) & 7) + 1;
+        let right_volume = i16::from(volumes & 7) + 1;
         let mut sides = panning;
-        let mut mixed = 0.0;
-        for output in outputs {
-            let left = left_volume * ((sides >> 4) & 1);
-            let right = right_volume * (sides & 1);
-            mixed += output * f32::from(left + right);
+        for gain in &mut self.channel_gains {
+            let left = left_volume * i16::from((sides >> 4) & 1);
+            let right = right_volume * i16::from(sides & 1);
+            *gain = left + right;
             sides >>= 1;
         }
-        mixed * (CHANNEL_GAIN / MAX_SIDE_GAIN)
     }
 }
 
