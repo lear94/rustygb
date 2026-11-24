@@ -21,8 +21,8 @@ const romInput = document.getElementById("rom-input");
 
 let gb = null;
 let lastRom = null;
-// What storage held when this tab last read or wrote it.
-let storedText = null;
+// Storage key of the running game and what it held when this tab last used it.
+let save = null;
 let lastName = "";
 let loadSequence = 0;
 let running = false;
@@ -111,18 +111,28 @@ function saveKey(rom) {
     return `${headerKey(rom)}:${rom.length}:${(hash >>> 0).toString(16)}`;
 }
 
-// Text stored for a ROM, or null. Blocked storage must not stop the game.
-function readStored(rom) {
-    try {
-        return localStorage.getItem(saveKey(rom)) ?? localStorage.getItem(headerKey(rom));
-    } catch (e) {
-        console.warn("Saves unavailable:", e);
-        return null;
-    }
-}
-
 function decodeSave(text) {
     return text === null ? undefined : Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
+// What storage holds for a ROM. Blocked storage must not stop the game.
+function openSave(rom) {
+    const key = saveKey(rom);
+    const legacyKey = headerKey(rom);
+    try {
+        const text = localStorage.getItem(key);
+        if (text !== null) {
+            return { key, text, legacy: null };
+        }
+        // Saves used to be keyed by header only, which hacks share with their original.
+        const legacy = localStorage.getItem(legacyKey);
+        const adopt =
+            legacy !== null && confirm("Use the save found for a game with the same header?");
+        return { key, text, legacy: adopt ? { key: legacyKey, text: legacy } : null };
+    } catch (e) {
+        console.warn("Saves unavailable:", e);
+        return { key, text: null, legacy: null };
+    }
 }
 
 // Returns whether no progress is pending.
@@ -132,18 +142,30 @@ function persist() {
     }
     const image = gb.save_image(unixNow());
     try {
-        if (readStored(lastRom) !== storedText) {
+        const current = localStorage.getItem(save.key);
+        // Cleared site data holds nothing to lose.
+        if (current !== null && current !== save.text) {
             throw new Error("another tab saved this game");
         }
         const text = btoa(Array.from(image, (b) => String.fromCharCode(b)).join(""));
-        localStorage.setItem(saveKey(lastRom), text);
-        storedText = text;
+        localStorage.setItem(save.key, text);
+        save.text = text;
+        claimLegacySave();
     } catch (e) {
         setStatus(`SAVE FAILED: ${e.message ?? e}`);
         return false;
     }
     gb.mark_saved();
     return true;
+}
+
+// Once copied under its own key, an adopted save must not be offered to other ROMs.
+function claimLegacySave() {
+    const legacy = save.legacy;
+    save.legacy = null;
+    if (legacy && localStorage.getItem(legacy.key) === legacy.text) {
+        localStorage.removeItem(legacy.key);
+    }
 }
 
 function unixNow() {
@@ -197,12 +219,13 @@ function loadRom(bytes, name) {
         return;
     }
     // Build first: a rejected ROM must leave the running game usable.
-    const stored = readStored(bytes);
-    const next = new WasmGameBoy(bytes, decodeSave(stored), SAMPLE_RATE, unixNow());
+    const opened = openSave(bytes);
+    const image = decodeSave(opened.legacy?.text ?? opened.text);
+    const next = new WasmGameBoy(bytes, image, SAMPLE_RATE, unixNow());
     gb?.free();
     gb = next;
     lastRom = bytes;
-    storedText = stored;
+    save = opened;
     lastName = name;
     running = true;
     resetBtn.disabled = false;
@@ -277,8 +300,11 @@ function setKey(event, pressed) {
     if (btn === undefined || !gb) {
         return;
     }
-    // Enter and Space belong to a focused control.
-    if (pressed && event.target instanceof Element && event.target.closest("button, input")) {
+    // Enter and Space belong to a focused control; a release still reaches the game.
+    if (event.target instanceof Element && event.target.closest("button, input")) {
+        if (!pressed) {
+            gb.set_button(btn, false);
+        }
         return;
     }
     if (pressed && (event.ctrlKey || event.metaKey || event.altKey)) {
