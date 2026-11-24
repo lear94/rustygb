@@ -1,4 +1,5 @@
 use super::*;
+use crate::hardware::OPEN_BUS;
 
 const TICKS_PER_LINE: u32 = 114;
 const TICKS_PER_FRAME: u32 = TICKS_PER_LINE * 154;

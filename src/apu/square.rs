@@ -3,7 +3,8 @@
 use super::envelope::Envelope;
 use super::length::Length;
 use super::sweep::{Sweep, SweepStep};
-use super::{Control, MAX_FREQUENCY, T_CYCLES_PER_TICK};
+use super::{Control, MAX_FREQUENCY};
+use crate::hardware::T_CYCLES_PER_M_CYCLE;
 
 const LENGTH_MAX: u16 = 64;
 const LENGTH_MASK: u8 = 0x3F;
@@ -44,7 +45,7 @@ impl Square {
         if !self.enabled {
             return;
         }
-        self.timer = self.timer.saturating_sub(T_CYCLES_PER_TICK);
+        self.timer = self.timer.saturating_sub(T_CYCLES_PER_M_CYCLE);
         if self.timer == 0 {
             self.timer = period(self.frequency);
             self.duty_step = (self.duty_step + 1) & DUTY_STEP_MASK;
@@ -130,7 +131,7 @@ impl Square {
 }
 
 fn period(frequency: u16) -> u16 {
-    (MAX_FREQUENCY + 1).saturating_sub(frequency) * T_CYCLES_PER_TICK
+    (MAX_FREQUENCY + 1).saturating_sub(frequency) * T_CYCLES_PER_M_CYCLE
 }
 
 #[cfg(test)]

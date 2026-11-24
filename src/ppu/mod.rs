@@ -3,9 +3,12 @@
 //! Each line is drawn at once when H-Blank starts, so mid-line register changes are not
 //! modelled.
 
+mod memory;
 mod render;
 #[cfg(test)]
 mod tests;
+
+use crate::hardware::T_CYCLES_PER_M_CYCLE;
 
 /// Visible width in pixels.
 pub const SCREEN_WIDTH: usize = 160;
@@ -15,7 +18,8 @@ pub const SCREEN_HEIGHT: usize = 144;
 const PIXEL_LEN: usize = 4;
 const ROW_LEN: usize = SCREEN_WIDTH * PIXEL_LEN;
 
-const DOTS_PER_TICK: u16 = 4;
+/// One dot per T-cycle.
+const DOTS_PER_TICK: u16 = T_CYCLES_PER_M_CYCLE;
 const DOTS_PER_LINE: u16 = 456;
 /// The line that enables the LCD starts partway.
 const LCD_ON_FIRST_DOT: u16 = 4;
@@ -33,8 +37,6 @@ const VRAM_LEN: usize = 8 * 1024;
 const VRAM_BASE: u16 = 0x8000;
 const OAM_LEN: usize = 160;
 const OAM_BASE: u16 = 0xFE00;
-/// Value seen on the bus when nothing drives it.
-const OPEN_BUS: u8 = 0xFF;
 
 const LCDC_ON: u8 = 0x80;
 const STAT_LYC_SOURCE: u8 = 0x40;
@@ -176,112 +178,6 @@ impl Ppu {
             }
         }
         std::mem::take(&mut self.requested)
-    }
-
-    /// Reads VRAM, OAM or a register; other addresses are open bus.
-    #[must_use]
-    pub fn read(&self, addr: u16) -> u8 {
-        match addr {
-            0x8000..=0x9FFF if self.vram_readable() => self.vram_byte(addr),
-            0xFE00..=0xFE9F if self.oam_readable() => self
-                .oam
-                .get(usize::from(addr - OAM_BASE))
-                .copied()
-                .unwrap_or(OPEN_BUS),
-            0xFF40 => self.lcdc,
-            0xFF41 => self.stat(),
-            0xFF42 => self.scy,
-            0xFF43 => self.scx,
-            0xFF44 => self.ly,
-            0xFF45 => self.lyc,
-            0xFF47 => self.bgp,
-            0xFF48 => self.obp0,
-            0xFF49 => self.obp1,
-            0xFF4A => self.wy,
-            0xFF4B => self.wx,
-            _ => OPEN_BUS,
-        }
-    }
-
-    /// Writes VRAM, OAM or a register; other addresses are ignored.
-    pub fn write(&mut self, addr: u16, val: u8) {
-        match addr {
-            0x8000..=0x9FFF if self.vram_writable() => {
-                if let Some(cell) = self.vram.get_mut(usize::from(addr - VRAM_BASE)) {
-                    *cell = val;
-                }
-            }
-            0xFE00..=0xFE9F if self.oam_writable() => {
-                self.write_oam(usize::from(addr - OAM_BASE), val);
-            }
-            0xFF40 => self.write_lcdc(val),
-            0xFF41 => {
-                // DMG quirk: for an instant every source is enabled.
-                self.stat_sources = STAT_SOURCES;
-                self.update_stat_line();
-                self.stat_sources = val & STAT_SOURCES;
-                self.update_stat_line();
-            }
-            0xFF42 => self.scy = val,
-            0xFF43 => self.scx = val,
-            0xFF45 => {
-                self.lyc = val;
-                self.compare_lyc(self.compared_line);
-            }
-            0xFF47 => self.bgp = val,
-            0xFF48 => self.obp0 = val,
-            0xFF49 => self.obp1 = val,
-            0xFF4A => self.wy = val,
-            0xFF4B => self.wx = val,
-            _ => {}
-        }
-    }
-
-    /// Writes an OAM byte, as DMA does; an index beyond OAM is ignored.
-    pub fn write_oam(&mut self, idx: usize, val: u8) {
-        if let Some(cell) = self.oam.get_mut(idx) {
-            *cell = val;
-        }
-    }
-
-    fn vram_readable(&self) -> bool {
-        // Reads are cut off one M-cycle before writes.
-        self.mode != Mode::Drawing && !self.at_scan_end()
-    }
-
-    fn vram_writable(&self) -> bool {
-        self.mode != Mode::Drawing
-    }
-
-    fn oam_readable(&self) -> bool {
-        // The scan claims OAM while STAT still reports mode 0.
-        let scan_starting = self.dots == 0 && (1..FIRST_VBLANK_LINE).contains(&self.line);
-        matches!(self.mode, Mode::HBlank | Mode::VBlank) && !scan_starting
-    }
-
-    fn oam_writable(&self) -> bool {
-        // Between scan and drawing, writes get through for one M-cycle.
-        matches!(self.mode, Mode::HBlank | Mode::VBlank) || self.at_scan_end()
-    }
-
-    fn at_scan_end(&self) -> bool {
-        self.mode == Mode::OamScan && self.dots == OAM_SCAN_LAST_DOT
-    }
-
-    fn vram_byte(&self, addr: u16) -> u8 {
-        self.vram
-            .get(usize::from(addr.wrapping_sub(VRAM_BASE)))
-            .copied()
-            .unwrap_or(OPEN_BUS)
-    }
-
-    fn stat(&self) -> u8 {
-        let coincidence = if self.coincidence {
-            STAT_COINCIDENCE
-        } else {
-            0
-        };
-        STAT_UNUSED | self.stat_sources | coincidence | self.mode as u8
     }
 
     fn write_lcdc(&mut self, val: u8) {

@@ -7,12 +7,11 @@ mod rtc;
 
 pub use error::CartridgeError;
 
+use crate::hardware::OPEN_BUS;
 use header::Header;
 use mapper::{Mapper, RamTarget};
 use rtc::Rtc;
 
-/// Value seen on the bus when nothing drives it.
-const OPEN_BUS: u8 = 0xFF;
 const ROM_BANK_SHIFT: u32 = 14;
 const ROM_BANK_MASK: u16 = (1 << ROM_BANK_SHIFT) - 1;
 /// Every cartridge maps at least two ROM banks.

@@ -1,7 +1,8 @@
 //! Wave channel: CH3 plays 32 four-bit samples from wave RAM.
 
 use super::length::Length;
-use super::{Control, MAX_FREQUENCY, OPEN_BUS, T_CYCLES_PER_TICK};
+use super::{Control, MAX_FREQUENCY};
+use crate::hardware::{OPEN_BUS, T_CYCLES_PER_M_CYCLE};
 
 const LENGTH_MAX: u16 = 256;
 pub(super) const WAVE_RAM_LEN: usize = 16;
@@ -51,7 +52,7 @@ impl Wave {
         if !self.enabled {
             return;
         }
-        let mut elapsed = T_CYCLES_PER_TICK;
+        let mut elapsed = T_CYCLES_PER_M_CYCLE;
         self.just_read = false;
         while elapsed >= self.timer {
             elapsed -= self.timer;
@@ -254,7 +255,7 @@ mod tests {
         wave.tick();
         wave.tick();
         assert!(!wave.just_read);
-        wave.timer = T_CYCLES_PER_TICK;
+        wave.timer = T_CYCLES_PER_M_CYCLE;
         wave.tick();
         assert_eq!(wave.read_ram(9), wave.ram[usize::from(wave.position >> 1)]);
         wave.write_dac(0);

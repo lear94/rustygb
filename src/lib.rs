@@ -31,6 +31,7 @@ pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
+mod hardware;
 pub mod joypad;
 pub mod ppu;
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,17 +40,13 @@ pub mod serial;
 pub mod timer;
 
 pub use cartridge::CartridgeError;
+pub use hardware::{CLOCK_HZ, CYCLES_PER_FRAME};
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::bus::Motherboard;
 use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
-
-/// T-cycles per second.
-pub const CLOCK_HZ: u32 = 4_194_304;
-/// Number of T-cycles in one full DMG frame (≈ 59.73 Hz refresh).
-pub const CYCLES_PER_FRAME: u32 = 70_224;
 
 /// High-level emulator wrapper that ties a [`Cpu`] to its [`Motherboard`].
 ///

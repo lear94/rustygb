@@ -38,8 +38,8 @@ fn run(apu: &mut Apu, ticks: u32) -> Vec<f32> {
 fn tick_produces_exact_sample_count() {
     for rate in [0, 1, 44_100, SAMPLE_RATE_HZ, u32::MAX] {
         let mut apu = Apu::new(rate);
-        let expected = usize::try_from(rate.min(TICK_RATE_HZ)).expect("fits");
-        assert_eq!(run(&mut apu, TICK_RATE_HZ).len(), expected);
+        let expected = usize::try_from(rate.min(M_CYCLES_PER_SECOND)).expect("fits");
+        assert_eq!(run(&mut apu, M_CYCLES_PER_SECOND).len(), expected);
     }
 }
 
@@ -47,7 +47,7 @@ fn tick_produces_exact_sample_count() {
 fn tick_square_pitch_is_exact() {
     let mut apu = apu();
     play_square_2(&mut apu, 0x7F9);
-    let samples = run(&mut apu, TICK_RATE_HZ);
+    let samples = run(&mut apu, M_CYCLES_PER_SECOND);
     let rises = samples.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0);
     // 131072 / 7 Hz, below the 24 kHz Nyquist limit.
     assert!((18_723..=18_725).contains(&rises.count()));
@@ -68,7 +68,7 @@ fn mix_stays_within_unit_range() {
     apu.write(0xFF21, 0xF0);
     apu.write(0xFF23, 0x80);
     assert_eq!(apu.read(NR52), 0xFF);
-    let samples = run(&mut apu, TICK_RATE_HZ / 4);
+    let samples = run(&mut apu, M_CYCLES_PER_SECOND / 4);
     assert!(samples.iter().all(|s| s.abs() <= 1.0));
     assert!(samples.iter().any(|s| s.abs() > 0.5));
 }
@@ -84,7 +84,7 @@ fn mix_unpanned_channel_is_silent() {
 #[test]
 fn drain_samples_queue_is_bounded() {
     let mut apu = apu();
-    tick(&mut apu, TICK_RATE_HZ);
+    tick(&mut apu, M_CYCLES_PER_SECOND);
     assert_eq!(apu.buffered_samples(), MAX_BUFFERED_SAMPLES);
     assert_eq!(
         apu.samples.capacity(),
@@ -132,7 +132,7 @@ fn write_power_off_clears_registers_but_not_wave_ram() {
 fn tick_powered_off_still_emits_silence() {
     let mut apu = apu();
     apu.write(NR52, 0);
-    let samples = run(&mut apu, TICK_RATE_HZ / 8);
+    let samples = run(&mut apu, M_CYCLES_PER_SECOND / 8);
     assert_eq!(samples.len(), 6000);
     assert!(samples.iter().all(|s| s.abs() < f32::EPSILON));
 }

@@ -5,6 +5,8 @@
 //! emulators: five live and five latched registers as little-endian words, then a Unix
 //! timestamp.
 
+use crate::hardware::{M_CYCLES_PER_SECOND, OPEN_BUS};
+
 /// Footer with a 64-bit timestamp, the one written.
 pub(super) const FOOTER_LEN: usize = 48;
 /// Footer with a 32-bit timestamp, accepted on load.
@@ -13,7 +15,6 @@ const REGISTER_COUNT: usize = 5;
 const WORD_LEN: usize = 4;
 const TIMESTAMP_OFFSET: usize = 2 * REGISTER_COUNT * WORD_LEN;
 
-const M_CYCLES_PER_SECOND: u32 = 1_048_576;
 const SECONDS_PER_MINUTE: u64 = 60;
 const MINUTES_PER_HOUR: u64 = 60;
 const HOURS_PER_DAY: u64 = 24;
@@ -63,7 +64,7 @@ impl Rtc {
         self.latched
             .get(register_idx(select))
             .copied()
-            .unwrap_or(0xFF)
+            .unwrap_or(OPEN_BUS)
     }
 
     /// Writes the live register at bank-select value `select`.

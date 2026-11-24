@@ -6,20 +6,18 @@ mod tests;
 
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
+use crate::hardware::OPEN_BUS;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
 use dma::OamDma;
 
-/// T-cycles per M-cycle, the granularity of bus accesses.
-pub const T_CYCLES_PER_M_CYCLE: u32 = 4;
 const WRAM_LEN: usize = 8 * 1024;
 const WRAM_MASK: u16 = 0x1FFF;
+const _: () = assert!(WRAM_MASK as usize == WRAM_LEN - 1);
 const HRAM_LEN: usize = 127;
 const HRAM_BASE: u16 = 0xFF80;
-/// Value seen on the bus when nothing drives it.
-const OPEN_BUS: u8 = 0xFF;
 
 const IRQ_TIMER: u8 = 0x04;
 const IRQ_SERIAL: u8 = 0x08;
@@ -157,40 +155,53 @@ impl Motherboard {
 
     fn read_high(&self, addr: u16) -> u8 {
         match addr {
+            0xFF10..=0xFF3F => self.apu.read(addr),
+            0xFF46 => self.dma.register(),
+            0xFF40..=0xFF4B => self.ppu.read(addr),
+            0xFF80..=0xFFFE => self
+                .hram
+                .get(usize::from(addr - HRAM_BASE))
+                .copied()
+                .unwrap_or(OPEN_BUS),
+            0xFFFF => self.ie,
+            _ => self.read_io(addr),
+        }
+    }
+
+    fn read_io(&self, addr: u16) -> u8 {
+        match addr {
             0xFF00 => self.joypad.read(),
             0xFF01 => self.serial.data(),
             0xFF02 => self.serial.control(),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.if_reg | IF_UNUSED,
-            0xFF10..=0xFF3F => self.apu.read(addr),
-            0xFF46 => self.dma.register(),
-            0xFF40..=0xFF4B => self.ppu.read(addr),
-            0xFFFF => self.ie,
-            _ => self.hram.get(hram_idx(addr)).copied().unwrap_or(OPEN_BUS),
+            _ => OPEN_BUS,
         }
     }
 
     fn write_high(&mut self, addr: u16, val: u8) {
+        match addr {
+            0xFF10..=0xFF3F => self.apu.write(addr, val),
+            0xFF46 => self.dma.start(val),
+            0xFF40..=0xFF4B => self.ppu.write(addr, val),
+            0xFF80..=0xFFFE => {
+                if let Some(cell) = self.hram.get_mut(usize::from(addr - HRAM_BASE)) {
+                    *cell = val;
+                }
+            }
+            0xFFFF => self.ie = val,
+            _ => self.write_io(addr, val),
+        }
+    }
+
+    fn write_io(&mut self, addr: u16, val: u8) {
         match addr {
             0xFF00 => self.joypad.write(val),
             0xFF01 => self.serial.write_data(val),
             0xFF02 => self.serial.write_control(val),
             0xFF04..=0xFF07 => self.timer.write(addr, val),
             0xFF0F => self.if_reg = val | IF_UNUSED,
-            0xFF10..=0xFF3F => self.apu.write(addr, val),
-            0xFF46 => self.dma.start(val),
-            0xFF40..=0xFF4B => self.ppu.write(addr, val),
-            0xFFFF => self.ie = val,
-            _ => {
-                if let Some(cell) = self.hram.get_mut(hram_idx(addr)) {
-                    *cell = val;
-                }
-            }
+            _ => {}
         }
     }
-}
-
-/// Index into high RAM; addresses outside it wrap to an index beyond its length.
-fn hram_idx(addr: u16) -> usize {
-    usize::from(addr.wrapping_sub(HRAM_BASE))
 }

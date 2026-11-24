@@ -2,7 +2,8 @@
 
 use super::envelope::Envelope;
 use super::length::Length;
-use super::{Control, T_CYCLES_PER_TICK};
+use super::Control;
+use crate::hardware::T_CYCLES_PER_M_CYCLE;
 
 const LENGTH_MAX: u16 = 64;
 const LENGTH_MASK: u8 = 0x3F;
@@ -42,7 +43,7 @@ impl Noise {
         if !self.enabled {
             return;
         }
-        self.timer = self.timer.saturating_sub(u32::from(T_CYCLES_PER_TICK));
+        self.timer = self.timer.saturating_sub(u32::from(T_CYCLES_PER_M_CYCLE));
         if self.timer != 0 {
             return;
         }

@@ -9,15 +9,12 @@ mod sweep;
 mod tests;
 mod wave;
 
+use crate::hardware::{M_CYCLES_PER_SECOND, OPEN_BUS};
 use noise::Noise;
 use square::Square;
 use std::collections::VecDeque;
 use wave::Wave;
 
-/// T-cycles per call to [`Apu::tick`].
-const T_CYCLES_PER_TICK: u16 = 4;
-/// Calls to [`Apu::tick`] per emulated second.
-const TICK_RATE_HZ: u32 = 1_048_576;
 const SEQUENCER_STEP_MASK: u8 = 7;
 /// Largest 11-bit channel frequency.
 const MAX_FREQUENCY: u16 = 0x7FF;
@@ -28,8 +25,6 @@ const CHANNEL_GAIN: f32 = 0.25;
 /// Two sides with volumes 1-8 each.
 const MAX_SIDE_GAIN: f32 = 16.0;
 
-/// Value seen on the bus when nothing drives it.
-const OPEN_BUS: u8 = 0xFF;
 const REGISTER_BASE: u16 = 0xFF10;
 const REGISTER_COUNT: usize = 0x17;
 const WAVE_RAM_BASE: u16 = 0xFF30;
@@ -79,7 +74,7 @@ pub struct Apu {
     /// Next sequencer step.
     sequencer_step: u8,
     sample_rate_hz: u32,
-    /// Fractional sample position, in units of 1 / [`TICK_RATE_HZ`].
+    /// Fractional sample position, in units of 1 / [`M_CYCLES_PER_SECOND`].
     sample_phase: u32,
     samples: VecDeque<f32>,
 }
@@ -99,7 +94,7 @@ impl Apu {
             registers: [0; REGISTER_COUNT],
             powered: true,
             sequencer_step: 0,
-            sample_rate_hz: sample_rate_hz.min(TICK_RATE_HZ),
+            sample_rate_hz: sample_rate_hz.min(M_CYCLES_PER_SECOND),
             sample_phase: 0,
             samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
         };
@@ -157,8 +152,8 @@ impl Apu {
 
     fn sample_due(&mut self) -> bool {
         self.sample_phase += self.sample_rate_hz;
-        if self.sample_phase >= TICK_RATE_HZ {
-            self.sample_phase -= TICK_RATE_HZ;
+        if self.sample_phase >= M_CYCLES_PER_SECOND {
+            self.sample_phase -= M_CYCLES_PER_SECOND;
             return true;
         }
         false

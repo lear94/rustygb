@@ -11,7 +11,8 @@ mod tests;
 
 pub use registers::{Registers, FLAG_C, FLAG_H, FLAG_N, FLAG_Z};
 
-use crate::bus::{Motherboard, T_CYCLES_PER_M_CYCLE};
+use crate::bus::Motherboard;
+use crate::hardware::T_CYCLES_PER_M_CYCLE;
 use registers::{R16, R8};
 
 const INTERRUPT_VECTOR_BASE: u16 = 0x40;
@@ -72,7 +73,7 @@ impl Cpu {
     pub fn step(&mut self, bus: &mut Motherboard) -> u32 {
         self.m_cycles = 0;
         self.advance(bus);
-        self.m_cycles * T_CYCLES_PER_M_CYCLE
+        self.m_cycles * u32::from(T_CYCLES_PER_M_CYCLE)
     }
 
     fn advance(&mut self, bus: &mut Motherboard) {

@@ -1,7 +1,7 @@
 //! DMG timer block: DIV, TIMA, TMA and TAC.
 
-/// T-cycles per call to [`Timer::tick`].
-const T_CYCLES_PER_TICK: u16 = 4;
+use crate::hardware::{OPEN_BUS, T_CYCLES_PER_M_CYCLE};
+
 /// Divider when the first opcode fetch begins after the DMG boot ROM.
 const POST_BOOT_DIVIDER: u16 = 0xABC8;
 /// Divider bit falling at 512 Hz.
@@ -71,7 +71,7 @@ impl Timer {
     ///
     /// The fastest rate has a 16 T-cycle period, so one M-cycle holds at most one edge.
     pub fn tick(&mut self) -> TimerTick {
-        let divider = self.divider.wrapping_add(T_CYCLES_PER_TICK);
+        let divider = self.divider.wrapping_add(T_CYCLES_PER_M_CYCLE);
         let fallen = self.divider & !divider;
         // Nearly every tick is idle; this costs one branch instead of the full update.
         if fallen & self.watched_bits == 0
@@ -106,7 +106,7 @@ impl Timer {
             0xFF05 => self.tima,
             0xFF06 => self.tma,
             0xFF07 => self.tac | TAC_UNUSED,
-            _ => 0xFF,
+            _ => OPEN_BUS,
         }
     }
 
