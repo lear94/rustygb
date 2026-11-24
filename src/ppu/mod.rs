@@ -86,6 +86,8 @@ pub struct Ppu {
     /// Lines of the window drawn this frame.
     window_line: u8,
     mode: Mode,
+    /// The first line after enabling the LCD has no OAM scan and reports mode 0 instead.
+    skip_oam_scan: bool,
     /// OR of all STAT sources; only its rising edge interrupts.
     stat_line: bool,
     requested: u8,
@@ -114,6 +116,7 @@ impl Ppu {
             dots: 0,
             window_line: 0,
             mode: Mode::OamScan,
+            skip_oam_scan: false,
             stat_line: false,
             requested: 0,
         }
@@ -234,6 +237,7 @@ impl Ppu {
             self.update_stat_line();
         }
         if !was_on && is_on {
+            self.skip_oam_scan = true;
             self.compare_lyc();
         }
     }
@@ -251,6 +255,9 @@ impl Ppu {
 
     fn update_visible_mode(&mut self) {
         let mode = if self.dots <= OAM_SCAN_LAST_DOT {
+            if self.skip_oam_scan {
+                return;
+            }
             Mode::OamScan
         } else if self.dots <= DRAWING_LAST_DOT {
             Mode::Drawing
@@ -261,6 +268,7 @@ impl Ppu {
             return;
         }
         self.mode = mode;
+        self.skip_oam_scan = false;
         self.update_stat_line();
         if mode == Mode::HBlank {
             self.render_line();

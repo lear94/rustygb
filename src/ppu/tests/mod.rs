@@ -128,3 +128,15 @@ fn write_oam_out_of_range_is_ignored() {
     ppu.write_oam(OAM_LEN, 2);
     assert_eq!(ppu.read(0xFE9F), 1);
 }
+
+#[test]
+fn write_lcdc_on_first_line_has_no_oam_scan() {
+    let mut ppu = Ppu::new();
+    ppu.write(LCDC, 0);
+    ppu.write(LCDC, 0x80);
+    ppu.write(STAT, STAT_OAM_SOURCE);
+    for (ticks, mode) in [(1, 0), (19, 0), (1, 3), (43, 0), (50, 2)] {
+        requests(&mut ppu, ticks, 0);
+        assert_eq!(ppu.read(STAT) & 3, mode, "dot {}", ppu.dots);
+    }
+}
