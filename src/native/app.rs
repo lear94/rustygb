@@ -25,6 +25,10 @@ const AUDIO_RETRY_PERIOD: Duration = Duration::from_secs(5);
 /// Exit code of a session closed with unsaved progress.
 const EXIT_UNSAVED: u8 = 2;
 
+/// The system asked the process to end.
+#[derive(Debug)]
+pub(super) struct Terminate;
+
 pub(super) struct App {
     /// ROM of the command line, until the window opens.
     initial_rom: Option<PathBuf>,
@@ -208,7 +212,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<Terminate> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.display.is_some() {
             return;
@@ -240,6 +244,11 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _: Terminate) {
+        // No confirmation: the system kills what does not stop. `exiting` saves.
+        event_loop.exit();
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

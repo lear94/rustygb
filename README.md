@@ -41,7 +41,7 @@ share of mode 3 length, the link cable and Game Boy Color features.
 * **MBC2:** Bank switching with built-in RAM.
 * **MBC3 / MBC30:** Bank switching and real-time clock.
 * **MBC5:** Bank switching; the rumble motor is ignored.
-* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on a normal exit, on ROM change and every ~10 s (the web build uses `localStorage`). If saving fails, closing or loading another ROM asks to be repeated before losing progress. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
+* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on exit (also by Ctrl-C or a termination signal), on ROM change and every ~10 s (the web build uses `localStorage`). If saving fails, closing or loading another ROM asks to be repeated before losing progress. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
 
 ---
 
