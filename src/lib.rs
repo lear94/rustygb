@@ -3,7 +3,7 @@
 //! The same crate is used by:
 //!
 //! * the native binary defined in `src/main.rs` (winit + pixels + cpal)
-//! * the WebAssembly front-end built with `wasm-pack` (see `wasm.rs`)
+//! * the WebAssembly front-end built with `wasm-pack` (see `wasm/`)
 //! * downstream tests and tooling that want to drive the emulator
 //!   programmatically
 //!
@@ -37,9 +37,6 @@ pub mod ppu;
 pub mod save;
 pub mod serial;
 pub mod timer;
-
-#[cfg(target_arch = "wasm32")]
-pub mod wasm;
 
 pub use cartridge::CartridgeError;
 pub use joypad::Button;

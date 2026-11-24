@@ -70,7 +70,7 @@ emulator runs in any modern browser. Install
 [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) and build with:
 
 ```bash
-wasm-pack build --release --target web --out-dir pkg
+wasm-pack build wasm --release --target web --out-dir ../pkg --out-name rusty_gb
 ```
 
 Then serve the repository root with any static HTTP server and open
@@ -90,7 +90,6 @@ src/
 ├── lib.rs        High-level GameBoy wrapper + module re-exports
 ├── main.rs       Desktop entry point
 ├── native/       Desktop front-end (window, audio, pacing, saves)
-├── wasm.rs       wasm-bindgen JS bindings (compiled only on wasm32)
 ├── cpu/          Sharp SM83 CPU
 ├── bus/          System bus and OAM DMA
 ├── ppu/          Pixel Processing Unit
@@ -100,5 +99,6 @@ src/
 ├── serial.rs     Serial port (no link partner)
 ├── joypad.rs     Backend-agnostic joypad
 └── timer.rs      DIV/TIMA/TMA/TAC
+wasm/             wasm-bindgen JS bindings
 web/              Browser front-end for the WebAssembly build
 ```

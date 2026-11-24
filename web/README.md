@@ -1,7 +1,7 @@
 # RustyGB — WebAssembly front-end
 
 This directory hosts a minimal browser UI that drives the RustyGB core
-through its `wasm-bindgen` bindings (see `src/wasm.rs`).
+through its `wasm-bindgen` bindings (see `wasm/`).
 
 ## Build
 
@@ -14,7 +14,7 @@ cargo install wasm-pack
 From the project root, build the WebAssembly module:
 
 ```bash
-wasm-pack build --release --target web --out-dir pkg
+wasm-pack build wasm --release --target web --out-dir ../pkg --out-name rusty_gb
 ```
 
 The command produces `pkg/rusty_gb.js` and `pkg/rusty_gb_bg.wasm`, which the

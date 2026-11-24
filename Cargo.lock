@@ -1653,14 +1653,21 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "rusty_gb"
 version = "1.0.0"
 dependencies = [
- "console_error_panic_hook",
  "cpal",
  "criterion",
  "crossbeam-channel",
  "pixels",
- "wasm-bindgen",
  "winit",
  "winit_input_helper",
+]
+
+[[package]]
+name = "rusty_gb_wasm"
+version = "1.0.0"
+dependencies = [
+ "console_error_panic_hook",
+ "rusty_gb",
+ "wasm-bindgen",
 ]
 
 [[package]]

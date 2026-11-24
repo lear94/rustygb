@@ -1,8 +1,6 @@
 //! WebAssembly bindings.
 //!
-//! Compiled only for `wasm32-*` targets, this module exposes a thin
-//! `wasm-bindgen` wrapper around [`crate::GameBoy`] so the emulator can be
-//! driven from JavaScript:
+//! Thin `wasm-bindgen` wrapper around [`rusty_gb::GameBoy`]:
 //!
 //! ```js
 //! import init, { WasmGameBoy, WasmButton } from "./pkg/rusty_gb.js";
@@ -21,9 +19,9 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{Button, GameBoy};
+use rusty_gb::{Button, GameBoy};
 
-/// JS-facing mirror of [`crate::Button`]. `wasm-bindgen` does not support
+/// JS-facing mirror of [`rusty_gb::Button`]. `wasm-bindgen` does not support
 /// re-exporting external enums directly, so we duplicate the variants and
 /// translate at the boundary.
 #[wasm_bindgen]
@@ -81,7 +79,7 @@ impl WasmGameBoy {
     /// Build a new emulator from a ROM byte array and an audio sample rate.
     ///
     /// # Errors
-    /// The message of the [`crate::CartridgeError`] rejecting the ROM.
+    /// The message of the [`rusty_gb::CartridgeError`] rejecting the ROM.
     #[wasm_bindgen(constructor)]
     pub fn new(rom: Vec<u8>, sample_rate: u32) -> Result<WasmGameBoy, JsValue> {
         GameBoy::from_rom(rom, sample_rate)
