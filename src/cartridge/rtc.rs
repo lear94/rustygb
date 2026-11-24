@@ -298,4 +298,30 @@ mod tests {
         clock.restore(&[0; 47]);
         assert_eq!(clock.live[0], 9);
     }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            rng_seed: proptest::test_runner::RngSeed::Fixed(0),
+            ..proptest::test_runner::Config::with_cases(64)
+        })]
+
+        #[test]
+        fn advance_seconds_equals_stepping(
+            live in proptest::array::uniform5(0u8..=255),
+            seconds in 0u64..200_000,
+        ) {
+            let mut masked = live;
+            for (register, mask) in masked.iter_mut().zip(REGISTER_MASKS) {
+                *register &= mask;
+            }
+            // Out-of-range fields skip carries, so only valid times have a closed form.
+            masked[0] %= 60;
+            masked[1] %= 60;
+            masked[2] %= 24;
+            let (mut fast, mut slow) = (rtc(masked), rtc(masked));
+            fast.advance_seconds(seconds);
+            (0..seconds).for_each(|_| slow.advance_second());
+            proptest::prop_assert_eq!(fast.live, slow.live);
+        }
+    }
 }

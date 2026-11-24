@@ -292,4 +292,51 @@ mod tests {
     fn sign_extend_covers_extremes() {
         assert_eq!([0x7F, 0x80, 0xFF].map(sign_extend), [127, -128, -1]);
     }
+
+    /// Flags and result of `a + b + carry` computed in wide arithmetic.
+    fn naive_add(a: u8, b: u8, carry: bool) -> (u8, u8) {
+        let carry = u16::from(carry);
+        let wide = u16::from(a) + u16::from(b) + carry;
+        let nibbles = u16::from(a % 16) + u16::from(b % 16) + carry;
+        let result = u8::try_from(wide % 256).expect("reduced modulo 256");
+        (
+            result,
+            flag_if(FLAG_Z, result == 0)
+                | flag_if(FLAG_H, nibbles > 15)
+                | flag_if(FLAG_C, wide > 255),
+        )
+    }
+
+    /// Flags and result of `a - b - carry` computed in wide arithmetic.
+    fn naive_sub(a: u8, b: u8, carry: bool) -> (u8, u8) {
+        let carry = i16::from(carry);
+        let wide = i16::from(a) - i16::from(b) - carry;
+        let nibbles = i16::from(a % 16) - i16::from(b % 16) - carry;
+        let result = u8::try_from(wide.rem_euclid(256)).expect("reduced modulo 256");
+        (
+            result,
+            FLAG_N
+                | flag_if(FLAG_Z, result == 0)
+                | flag_if(FLAG_H, nibbles < 0)
+                | flag_if(FLAG_C, wide < 0),
+        )
+    }
+
+    #[test]
+    fn alu_matches_wide_arithmetic_over_whole_domain() {
+        let pairs = (0..=u8::MAX).flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)));
+        for ((a, b), carry) in pairs.flat_map(|pair| [(pair, false), (pair, true)]) {
+            for (operation, expected) in [
+                (ADD, naive_add(a, b, false)),
+                (ADC, naive_add(a, b, carry)),
+                (SUB, naive_sub(a, b, false)),
+                (SBC, naive_sub(a, b, carry)),
+                (CP, (a, naive_sub(a, b, false).1)),
+            ] {
+                let mut regs = regs(a, flag_if(FLAG_C, carry));
+                regs.alu(operation, b);
+                assert_eq!((regs.a, regs.f), expected, "{operation} {a} {b} {carry}");
+            }
+        }
+    }
 }
