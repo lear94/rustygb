@@ -26,7 +26,6 @@ use crate::cartridge::Cartridge;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::timer::Timer;
-use anyhow::Result;
 
 const WRAM_SIZE: usize = 8 * 1024;
 const HRAM_SIZE: usize = 127;
@@ -34,7 +33,7 @@ const HRAM_SIZE: usize = 127;
 /// Top-level emulated machine. Holds every peripheral and arbitrates the
 /// CPU's memory traffic.
 pub struct Motherboard {
-    cartridge: Box<dyn Cartridge>,
+    cartridge: Cartridge,
     pub ppu: Ppu,
     pub apu: Apu,
     pub timer: Timer,
@@ -53,7 +52,7 @@ pub struct Motherboard {
 impl Motherboard {
     /// Build a fresh motherboard around the provided cartridge. The audio
     /// sample rate selects the APU output frequency in Hz.
-    pub fn new(cartridge: Box<dyn Cartridge>, sample_rate: u32) -> Self {
+    pub fn new(cartridge: Cartridge, sample_rate: u32) -> Self {
         Self {
             cartridge,
             ppu: Ppu::new(),
@@ -91,10 +90,9 @@ impl Motherboard {
         }
     }
 
-    /// Persist the cartridge's external RAM to `<base_path>.sav`.
-    pub fn save_external_ram(&self, base_path: &str) -> Result<()> {
-        let save_path = std::path::Path::new(base_path).with_extension("sav");
-        self.cartridge.save_state(save_path.to_str().unwrap())
+    /// Borrow the inserted cartridge.
+    pub fn cartridge(&mut self) -> &mut Cartridge {
+        &mut self.cartridge
     }
 
     /// CPU-side byte read. Unmapped addresses return open-bus (`0xFF`).

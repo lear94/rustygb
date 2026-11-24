@@ -17,9 +17,6 @@ name = "rusty_gb"
 path = "src/main.rs"
 bench = false
 
-[dependencies]
-anyhow = "1.0"
-
 # Native (desktop) front-end dependencies.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pixels = "0.13.0"

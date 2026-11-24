@@ -31,18 +31,19 @@ pub mod cartridge;
 pub mod cpu;
 pub mod joypad;
 pub mod ppu;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod save;
 pub mod timer;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
+pub use cartridge::CartridgeError;
 pub use joypad::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
-use anyhow::Result;
-
 use crate::bus::Motherboard;
-use crate::cartridge::from_bytes;
+use crate::cartridge::Cartridge;
 use crate::cpu::Cpu;
 
 /// Number of T-cycles in one full DMG frame (≈ 59.73 Hz refresh).
@@ -60,26 +61,29 @@ pub struct GameBoy {
 impl GameBoy {
     /// Build an emulator from a raw ROM image. `sample_rate` is the APU
     /// output rate in Hz (typically the audio device's native rate).
-    pub fn from_rom(rom: Vec<u8>, sample_rate: u32) -> Result<Self> {
-        let cart = from_bytes(rom, None)?;
-        Self::with_cartridge(cart, sample_rate)
+    ///
+    /// # Errors
+    /// Same as [`Cartridge::from_bytes`].
+    pub fn from_rom(rom: Vec<u8>, sample_rate: u32) -> Result<Self, CartridgeError> {
+        Self::from_rom_with_save(rom, None, sample_rate)
     }
 
     /// Build an emulator from a ROM and a previously saved SRAM image.
+    ///
+    /// # Errors
+    /// Same as [`Cartridge::from_bytes`].
     pub fn from_rom_with_save(
         rom: Vec<u8>,
         saved_ram: Option<Vec<u8>>,
         sample_rate: u32,
-    ) -> Result<Self> {
-        let cart = from_bytes(rom, saved_ram)?;
-        Self::with_cartridge(cart, sample_rate)
-    }
-
-    fn with_cartridge(cart: Box<dyn cartridge::Cartridge>, sample_rate: u32) -> Result<Self> {
-        let bus = Motherboard::new(cart, sample_rate);
+    ) -> Result<Self, CartridgeError> {
+        let cartridge = Cartridge::from_bytes(rom, saved_ram)?;
         let mut cpu = Cpu::new();
         cpu.reset_to_boot();
-        Ok(Self { cpu, bus })
+        Ok(Self {
+            cpu,
+            bus: Motherboard::new(cartridge, sample_rate),
+        })
     }
 
     /// Run the CPU for one full frame's worth of T-cycles.
@@ -113,9 +117,9 @@ impl GameBoy {
         self.bus.joypad.set_button(button, pressed);
     }
 
-    /// Persist battery-backed SRAM next to `<rom_path>.sav`.
-    pub fn save_external_ram(&self, rom_path: &str) -> Result<()> {
-        self.bus.save_external_ram(rom_path)
+    /// Borrow the inserted cartridge, e.g. to persist its battery RAM.
+    pub fn cartridge(&mut self) -> &mut Cartridge {
+        self.bus.cartridge()
     }
 
     /// Direct access to the underlying motherboard (advanced use).
