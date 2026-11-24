@@ -64,7 +64,7 @@ cargo build --release
 ./target/release/rusty_gb path/to/game.gb
 ```
 
-Keys: `Z` = A, `X` = B, `Space` = Select, `Enter` = Start, arrows = D-Pad, `Esc` quits.
+Keys (by position, US layout): `Z` = A, `X` = B, `Space` = Select, `Enter` = Start, arrows = D-Pad, `Esc` quits.
 
 You can also drag-and-drop a `.gb` file onto the running window.
 

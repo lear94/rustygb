@@ -1,17 +1,17 @@
 //! Keyboard state mapped to buttons.
 
 use rusty_gb::Button;
-use winit::event::{ElementState, KeyboardInput, VirtualKeyCode};
+use winit::keyboard::KeyCode;
 
-const KEY_MAP: [(VirtualKeyCode, Button); BUTTON_COUNT] = [
-    (VirtualKeyCode::Z, Button::A),
-    (VirtualKeyCode::X, Button::B),
-    (VirtualKeyCode::Space, Button::Select),
-    (VirtualKeyCode::Return, Button::Start),
-    (VirtualKeyCode::Right, Button::Right),
-    (VirtualKeyCode::Left, Button::Left),
-    (VirtualKeyCode::Up, Button::Up),
-    (VirtualKeyCode::Down, Button::Down),
+const KEY_MAP: [(KeyCode, Button); BUTTON_COUNT] = [
+    (KeyCode::KeyZ, Button::A),
+    (KeyCode::KeyX, Button::B),
+    (KeyCode::Space, Button::Select),
+    (KeyCode::Enter, Button::Start),
+    (KeyCode::ArrowRight, Button::Right),
+    (KeyCode::ArrowLeft, Button::Left),
+    (KeyCode::ArrowUp, Button::Up),
+    (KeyCode::ArrowDown, Button::Down),
 ];
 const BUTTON_COUNT: usize = 8;
 
@@ -23,11 +23,10 @@ pub(super) struct Keys {
 }
 
 impl Keys {
-    pub(super) fn update(&mut self, input: KeyboardInput) {
-        let pressed = input.state == ElementState::Pressed;
+    pub(super) fn update(&mut self, code: KeyCode, pressed: bool) {
         let slots = self.held.iter_mut().zip(&mut self.tapped).zip(KEY_MAP);
         for ((held, tapped), (key, _)) in slots {
-            if input.virtual_keycode == Some(key) {
+            if code == key {
                 *held = pressed;
                 *tapped |= pressed;
             }
@@ -53,16 +52,6 @@ impl Keys {
 mod tests {
     use super::*;
 
-    fn key(keys: &mut Keys, code: VirtualKeyCode, state: ElementState) {
-        #[allow(deprecated, reason = "winit offers no other constructor")]
-        keys.update(KeyboardInput {
-            scancode: 0,
-            state,
-            virtual_keycode: Some(code),
-            modifiers: winit::event::ModifiersState::empty(),
-        });
-    }
-
     fn pressed(keys: &mut Keys) -> Vec<Button> {
         let frame = keys.next_frame().into_iter();
         frame.filter(|(_, on)| *on).map(|(b, _)| b).collect()
@@ -71,18 +60,18 @@ mod tests {
     #[test]
     fn next_frame_holds_until_release() {
         let mut keys = Keys::default();
-        key(&mut keys, VirtualKeyCode::Up, ElementState::Pressed);
+        keys.update(KeyCode::ArrowUp, true);
         assert_eq!(pressed(&mut keys), [Button::Up]);
         assert_eq!(pressed(&mut keys), [Button::Up]);
-        key(&mut keys, VirtualKeyCode::Up, ElementState::Released);
+        keys.update(KeyCode::ArrowUp, false);
         assert_eq!(pressed(&mut keys), []);
     }
 
     #[test]
     fn next_frame_short_tap_lasts_one_frame() {
         let mut keys = Keys::default();
-        key(&mut keys, VirtualKeyCode::Z, ElementState::Pressed);
-        key(&mut keys, VirtualKeyCode::Z, ElementState::Released);
+        keys.update(KeyCode::KeyZ, true);
+        keys.update(KeyCode::KeyZ, false);
         assert_eq!(pressed(&mut keys), [Button::A]);
         assert_eq!(pressed(&mut keys), []);
     }
@@ -90,7 +79,7 @@ mod tests {
     #[test]
     fn release_all_clears_held_keys() {
         let mut keys = Keys::default();
-        key(&mut keys, VirtualKeyCode::X, ElementState::Pressed);
+        keys.update(KeyCode::KeyX, true);
         keys.release_all();
         assert_eq!(pressed(&mut keys), []);
     }
@@ -98,7 +87,7 @@ mod tests {
     #[test]
     fn update_unmapped_key_is_ignored() {
         let mut keys = Keys::default();
-        key(&mut keys, VirtualKeyCode::Q, ElementState::Pressed);
+        keys.update(KeyCode::KeyQ, true);
         assert_eq!(pressed(&mut keys), []);
     }
 }

@@ -5,9 +5,10 @@ mod native;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
-    let Err(error) = native::run();
-    eprintln!("RustyGB: {error}");
-    std::process::ExitCode::FAILURE
+    native::run().unwrap_or_else(|error| {
+        eprintln!("RustyGB: {error}");
+        std::process::ExitCode::FAILURE
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
