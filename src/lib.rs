@@ -78,10 +78,8 @@ impl GameBoy {
         sample_rate: u32,
     ) -> Result<Self, CartridgeError> {
         let cartridge = Cartridge::from_bytes(rom, saved_ram)?;
-        let mut cpu = Cpu::new();
-        cpu.reset_to_boot();
         Ok(Self {
-            cpu,
+            cpu: Cpu::new(),
             bus: Motherboard::new(cartridge, sample_rate),
         })
     }
@@ -90,9 +88,7 @@ impl GameBoy {
     pub fn run_frame(&mut self) {
         let mut cycles: u32 = 0;
         while cycles < CYCLES_PER_FRAME {
-            let step = self.cpu.step(&mut self.bus) as u32;
-            self.bus.tick(step as u8);
-            cycles += step;
+            cycles += self.cpu.step(&mut self.bus);
         }
     }
 

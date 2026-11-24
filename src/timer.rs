@@ -1,95 +1,112 @@
-//! DMG timer block (DIV, TIMA, TMA, TAC).
-//!
-//! The timer counts T-cycles from the system clock and exposes four
-//! registers at `0xFF04-0xFF07`. TIMA increments on the falling edge of a
-//! selected DIV bit; an overflow latches TMA back into TIMA and raises the
-//! timer interrupt one M-cycle later — a quirk that *Tetris* relies on to
-//! seed its RNG.
+//! DMG timer block: DIV, TIMA, TMA and TAC.
 
+/// T-cycles per call to [`Timer::tick`].
+const T_CYCLES_PER_TICK: u16 = 4;
+/// Divider when the first opcode fetch begins after the DMG boot ROM.
+const POST_BOOT_DIVIDER: u16 = 0xABC8;
+const TAC_ENABLE: u8 = 0x04;
+const TAC_MASK: u8 = 0x07;
+/// Bits that do not exist in TAC read as 1.
+const TAC_UNUSED: u8 = 0xF8;
+
+/// Phase of TIMA, whose reload lags its overflow by one M-cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Counting,
+    Overflowed,
+    Reloading,
+}
+
+/// Divider and programmable timer.
+#[derive(Debug)]
 pub struct Timer {
-    /// 16-bit free-running counter. The CPU only sees its upper byte
-    /// through `0xFF04`, but the lower bits drive the TIMA multiplexer.
-    pub div: u16,
+    /// DIV is the high byte; the low byte drives the fast TIMA rates.
+    divider: u16,
     tima: u8,
     tma: u8,
     tac: u8,
-
-    /// Cached state of the previous tick's multiplexer output, used to
-    /// detect the falling edge that drives TIMA.
-    last_bit: bool,
-
-    /// One-cycle delay buffer: when TIMA overflows the reload to TMA and
-    /// the interrupt request are postponed by a single M-cycle.
-    overflow: bool,
+    phase: Phase,
 }
 
 impl Timer {
+    /// Creates a timer in its post-boot state.
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            div: 0,
+            divider: POST_BOOT_DIVIDER,
             tima: 0,
             tma: 0,
             tac: 0,
-            last_bit: false,
-            overflow: false,
+            phase: Phase::Counting,
         }
     }
 
-    /// Advance the timer by `cycles` T-cycles. Sets bit 2 of `if_reg` when
-    /// TIMA overflows (after the hardware-accurate one-cycle delay).
-    pub fn tick(&mut self, cycles: u8, if_reg: &mut u8) {
-        let inc = cycles as u16;
-
-        if self.overflow {
+    /// Advances one M-cycle.
+    ///
+    /// The fastest rate has a 16 T-cycle period, so one M-cycle holds at most one edge.
+    ///
+    /// # Returns
+    /// Whether the timer interrupt is requested.
+    pub fn tick(&mut self) -> bool {
+        let reload = self.phase == Phase::Overflowed;
+        if reload {
             self.tima = self.tma;
-            *if_reg |= 0x04;
-            self.overflow = false;
+            self.phase = Phase::Reloading;
+        } else {
+            self.phase = Phase::Counting;
         }
-
-        self.div = self.div.wrapping_add(inc);
-
-        // TAC bits 0-1 pick which DIV bit gates the TIMA increment:
-        // 00 → bit 9, 01 → bit 3, 10 → bit 5, 11 → bit 7.
-        let bit_idx = match self.tac & 0x03 {
-            0 => 9,
-            1 => 3,
-            2 => 5,
-            _ => 7,
-        };
-
-        let timer_enabled = (self.tac & 0x04) != 0;
-        let new_bit = timer_enabled && ((self.div >> bit_idx) & 1) != 0;
-
-        if self.last_bit && !new_bit {
-            let (result, overflowed) = self.tima.overflowing_add(1);
-            self.tima = result;
-            if overflowed {
-                self.overflow = true;
-            }
-        }
-        self.last_bit = new_bit;
+        self.change_input(self.divider.wrapping_add(T_CYCLES_PER_TICK), self.tac);
+        reload
     }
 
-    /// Read a timer register. Unmapped addresses return `0xFF`.
+    /// Clears the divider, as a DIV write or STOP does.
+    pub fn reset_divider(&mut self) {
+        self.change_input(0, self.tac);
+    }
+
+    /// Reads a timer register; other addresses are open bus.
+    #[must_use]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xFF04 => (self.div >> 8) as u8,
+            0xFF04 => self.divider.to_be_bytes()[0],
             0xFF05 => self.tima,
             0xFF06 => self.tma,
-            0xFF07 => self.tac | 0xF8,
+            0xFF07 => self.tac | TAC_UNUSED,
             _ => 0xFF,
         }
     }
 
-    /// Write to a timer register. Any write to `DIV` (`0xFF04`) resets the
-    /// entire 16-bit counter back to zero, as on real hardware.
+    /// Writes a timer register; other addresses are ignored.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF04 => self.div = 0,
-            0xFF05 => self.tima = val,
-            0xFF06 => self.tma = val,
-            0xFF07 => self.tac = val,
+            0xFF04 => self.reset_divider(),
+            // The reload wins over a write landing on the same M-cycle.
+            0xFF05 if self.phase != Phase::Reloading => {
+                self.tima = val;
+                self.phase = Phase::Counting;
+            }
+            0xFF06 => {
+                self.tma = val;
+                if self.phase == Phase::Reloading {
+                    self.tima = val;
+                }
+            }
+            0xFF07 => self.change_input(self.divider, val & TAC_MASK),
             _ => {}
+        }
+    }
+
+    /// TIMA counts falling edges of the selected divider bit, whatever causes them.
+    fn change_input(&mut self, divider: u16, tac: u8) {
+        let before = input_level(self.divider, self.tac);
+        self.divider = divider;
+        self.tac = tac;
+        if before && !input_level(divider, tac) {
+            let (tima, overflowed) = self.tima.overflowing_add(1);
+            self.tima = tima;
+            if overflowed {
+                self.phase = Phase::Overflowed;
+            }
         }
     }
 }
@@ -97,5 +114,111 @@ impl Timer {
 impl Default for Timer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn input_level(divider: u16, tac: u8) -> bool {
+    let bit = match tac & 3 {
+        0 => 9,
+        1 => 3,
+        2 => 5,
+        _ => 7,
+    };
+    tac & TAC_ENABLE != 0 && divider & (1 << bit) != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DIV: u16 = 0xFF04;
+    const TIMA: u16 = 0xFF05;
+    const TMA: u16 = 0xFF06;
+    const TAC: u16 = 0xFF07;
+
+    fn timer(tac: u8) -> Timer {
+        let mut timer = Timer::new();
+        timer.reset_divider();
+        timer.write(TAC, tac);
+        timer
+    }
+
+    fn run(timer: &mut Timer, m_cycles: u32) -> u32 {
+        (0..m_cycles).map(|_| u32::from(timer.tick())).sum()
+    }
+
+    #[test]
+    fn tick_counts_at_every_rate() {
+        for (tac, period) in [(4, 256), (5, 4), (6, 16), (7, 64)] {
+            let mut timer = timer(tac);
+            run(&mut timer, period * 5 - 1);
+            assert_eq!(timer.read(TIMA), 4, "TAC {tac}");
+            timer.tick();
+            assert_eq!(timer.read(TIMA), 5, "TAC {tac}");
+        }
+    }
+
+    #[test]
+    fn tick_disabled_does_not_count() {
+        let mut timer = timer(1);
+        run(&mut timer, 1024);
+        assert_eq!(timer.read(TIMA), 0);
+    }
+
+    #[test]
+    fn tick_overflow_reloads_one_cycle_later() {
+        let mut timer = timer(5);
+        timer.write(TMA, 0x42);
+        timer.write(TIMA, 0xFF);
+        assert_eq!(run(&mut timer, 4), 0);
+        assert_eq!(timer.read(TIMA), 0);
+        assert!(timer.tick());
+        assert_eq!(timer.read(TIMA), 0x42);
+        assert!(!timer.tick());
+    }
+
+    #[test]
+    fn write_tima_after_overflow_cancels_reload() {
+        let mut timer = timer(5);
+        timer.write(TIMA, 0xFF);
+        run(&mut timer, 4);
+        timer.write(TIMA, 0x10);
+        assert!(!timer.tick());
+        assert_eq!(timer.read(TIMA), 0x10);
+    }
+
+    #[test]
+    fn write_during_reload_follows_tma() {
+        let mut timer = timer(5);
+        timer.write(TIMA, 0xFF);
+        run(&mut timer, 5);
+        timer.write(TIMA, 0x10);
+        assert_eq!(timer.read(TIMA), 0);
+        timer.write(TMA, 0x20);
+        assert_eq!(timer.read(TIMA), 0x20);
+    }
+
+    #[test]
+    fn write_div_on_high_input_counts() {
+        let mut timer = timer(5);
+        run(&mut timer, 2);
+        timer.write(DIV, 0xFF);
+        assert_eq!((timer.read(DIV), timer.read(TIMA)), (0, 1));
+    }
+
+    #[test]
+    fn write_tac_disabling_on_high_input_counts() {
+        let mut timer = timer(5);
+        run(&mut timer, 2);
+        timer.write(TAC, 0);
+        assert_eq!((timer.read(TAC), timer.read(TIMA)), (0xF8, 1));
+    }
+
+    #[test]
+    fn read_div_is_high_byte() {
+        let mut timer = timer(0);
+        run(&mut timer, 64);
+        assert_eq!(timer.read(DIV), 1);
+        assert_eq!(timer.read(0), 0xFF);
     }
 }

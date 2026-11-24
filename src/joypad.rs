@@ -89,6 +89,12 @@ impl Joypad {
         value
     }
 
+    /// Returns whether a pressed button pulls one of the selected lines low.
+    #[must_use]
+    pub fn any_selected_pressed(&self) -> bool {
+        self.read() & 0x0F != 0x0F
+    }
+
     /// CPU write to P1: only the two column-select bits are writable.
     pub fn write(&mut self, value: u8) {
         self.column_select = value & 0x30;

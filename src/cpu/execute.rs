@@ -1,354 +1,266 @@
-//! Primary opcode dispatch: loads, jumps, rotations and A arithmetic.
+//! Opcode decoding and execution, one function per opcode column.
+//!
+//! Opcodes are split as `xx yyy zzz`, with `yyy = pp q`.
 
-use super::{Cpu, FLAG_C};
+use super::alu::sign_extend;
+use super::registers::{R16, R8};
+use super::Cpu;
 use crate::bus::Motherboard;
 
+/// Base of the I/O and high-RAM page reached by LDH.
+const HIGH_PAGE: u8 = 0xFF;
+/// RST targets sit 8 bytes apart, so the masked opcode is the address.
+const RST_MASK: u8 = 0x38;
+
 impl Cpu {
-    /// Decode and execute a single primary opcode. The `0xCB` prefix
-    /// dispatches to [`Cpu::execute_cb`].
-    pub(super) fn execute(&mut self, op: u8, bus: &mut Motherboard) -> u8 {
-        match op {
-            0x00 => 4,
-
-            // LD r, n8
-            0x06 => {
-                let v = self.next_byte(bus);
-                self.b = v;
-                8
+    pub(super) fn execute(&mut self, op: u8, bus: &mut Motherboard) {
+        let (y, z) = ((op >> 3) & 7, op & 7);
+        match op >> 6 {
+            0 => self.execute_block_0(y, z, bus),
+            1 if op == 0x76 => self.halt(bus),
+            1 => {
+                let val = self.load(R8::from_bits(z), bus);
+                self.store(R8::from_bits(y), val, bus);
             }
-            0x0E => {
-                let v = self.next_byte(bus);
-                self.c = v;
-                8
+            2 => {
+                let val = self.load(R8::from_bits(z), bus);
+                self.regs.alu(y, val);
             }
-            0x16 => {
-                let v = self.next_byte(bus);
-                self.d = v;
-                8
-            }
-            0x1E => {
-                let v = self.next_byte(bus);
-                self.e = v;
-                8
-            }
-            0x26 => {
-                let v = self.next_byte(bus);
-                self.h = v;
-                8
-            }
-            0x2E => {
-                let v = self.next_byte(bus);
-                self.l = v;
-                8
-            }
-            0x3E => {
-                let v = self.next_byte(bus);
-                self.a = v;
-                8
-            }
-            0x36 => {
-                let v = self.next_byte(bus);
-                bus.write_byte(self.get_hl(), v);
-                12
-            }
-
-            // LD r, r' (and LD (HL), r / LD r, (HL))
-            0x40..=0x75 | 0x77..=0x7F => self.exec_ld_r_r(op, bus),
-
-            // LD rr, n16
-            0x01 => {
-                let lo = self.next_byte(bus);
-                let hi = self.next_byte(bus);
-                self.c = lo;
-                self.b = hi;
-                12
-            }
-            0x11 => {
-                let lo = self.next_byte(bus);
-                let hi = self.next_byte(bus);
-                self.e = lo;
-                self.d = hi;
-                12
-            }
-            0x21 => {
-                let lo = self.next_byte(bus);
-                let hi = self.next_byte(bus);
-                self.l = lo;
-                self.h = hi;
-                12
-            }
-            0x31 => {
-                let v = self.next_word(bus);
-                self.sp = v;
-                12
-            }
-
-            // LD A, (rr) / LD A, (a16)
-            0x0A => {
-                self.a = bus.read_byte(self.get_bc());
-                8
-            }
-            0x1A => {
-                self.a = bus.read_byte(self.get_de());
-                8
-            }
-            0xFA => {
-                let a = self.next_word(bus);
-                self.a = bus.read_byte(a);
-                16
-            }
-
-            // LD (rr), A / LD (a16), A
-            0x02 => {
-                bus.write_byte(self.get_bc(), self.a);
-                8
-            }
-            0x12 => {
-                bus.write_byte(self.get_de(), self.a);
-                8
-            }
-            0xEA => {
-                let a = self.next_word(bus);
-                bus.write_byte(a, self.a);
-                16
-            }
-
-            // LD (HL+), A / LD A, (HL+) / LD (HL-), A / LD A, (HL-)
-            0x22 => {
-                bus.write_byte(self.get_hl(), self.a);
-                self.set_hl(self.get_hl().wrapping_add(1));
-                8
-            }
-            0x2A => {
-                self.a = bus.read_byte(self.get_hl());
-                self.set_hl(self.get_hl().wrapping_add(1));
-                8
-            }
-            0x32 => {
-                bus.write_byte(self.get_hl(), self.a);
-                self.set_hl(self.get_hl().wrapping_sub(1));
-                8
-            }
-            0x3A => {
-                self.a = bus.read_byte(self.get_hl());
-                self.set_hl(self.get_hl().wrapping_sub(1));
-                8
-            }
-
-            // PUSH rr
-            0xC5 => {
-                self.push_word(bus, self.get_bc());
-                16
-            }
-            0xD5 => {
-                self.push_word(bus, self.get_de());
-                16
-            }
-            0xE5 => {
-                self.push_word(bus, self.get_hl());
-                16
-            }
-            0xF5 => {
-                self.push_word(bus, (self.a as u16) << 8 | self.f as u16);
-                16
-            }
-
-            // POP rr
-            0xC1 => {
-                let v = self.pop_word(bus);
-                self.b = (v >> 8) as u8;
-                self.c = v as u8;
-                12
-            }
-            0xD1 => {
-                let v = self.pop_word(bus);
-                self.d = (v >> 8) as u8;
-                self.e = v as u8;
-                12
-            }
-            0xE1 => {
-                let v = self.pop_word(bus);
-                self.h = (v >> 8) as u8;
-                self.l = v as u8;
-                12
-            }
-            // POP AF: bottom nibble of F is hard-wired to zero.
-            0xF1 => {
-                let v = self.pop_word(bus);
-                self.a = (v >> 8) as u8;
-                self.f = (v as u8) & 0xF0;
-                12
-            }
-
-            // Jumps
-            0xC3 => {
-                self.pc = self.next_word(bus);
-                16
-            }
-            0xE9 => {
-                self.pc = self.get_hl();
-                4
-            }
-            0x18 => {
-                let o = self.next_byte(bus) as i8;
-                self.pc = self.pc.wrapping_add(o as u16);
-                12
-            }
-            0x20 => self.jr_cond(bus, !self.flag_z()),
-            0x28 => self.jr_cond(bus, self.flag_z()),
-            0x30 => self.jr_cond(bus, !self.flag_c()),
-            0x38 => self.jr_cond(bus, self.flag_c()),
-            0xC2 => self.jp_cond(bus, !self.flag_z()),
-            0xCA => self.jp_cond(bus, self.flag_z()),
-            0xD2 => self.jp_cond(bus, !self.flag_c()),
-            0xDA => self.jp_cond(bus, self.flag_c()),
-
-            // CALL / conditional CALL
-            0xCD => {
-                let d = self.next_word(bus);
-                self.push_word(bus, self.pc);
-                self.pc = d;
-                24
-            }
-            0xC4 => self.call_cond(bus, !self.flag_z()),
-            0xCC => self.call_cond(bus, self.flag_z()),
-            0xD4 => self.call_cond(bus, !self.flag_c()),
-            0xDC => self.call_cond(bus, self.flag_c()),
-
-            // RET / RETI / conditional RET
-            0xC9 => {
-                self.pc = self.pop_word(bus);
-                16
-            }
-            0xD9 => {
-                self.pc = self.pop_word(bus);
-                self.ime = true;
-                16
-            }
-            0xC0 => self.ret_cond(bus, !self.flag_z()),
-            0xC8 => self.ret_cond(bus, self.flag_z()),
-            0xD0 => self.ret_cond(bus, !self.flag_c()),
-            0xD8 => self.ret_cond(bus, self.flag_c()),
-
-            // RST n
-            0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => {
-                self.push_word(bus, self.pc);
-                self.pc = (op - 0xC7) as u16;
-                16
-            }
-
-            // Rotations on A (do not set Z).
-            0x07 => {
-                let c = self.a >> 7;
-                self.a = (self.a << 1) | c;
-                self.f = if c != 0 { FLAG_C } else { 0 };
-                4
-            }
-            0x0F => {
-                let c = self.a & 1;
-                self.a = (self.a >> 1) | (c << 7);
-                self.f = if c != 0 { FLAG_C } else { 0 };
-                4
-            }
-            0x17 => {
-                let c = self.a >> 7;
-                let carry_in = if (self.f & FLAG_C) != 0 { 1 } else { 0 };
-                self.a = (self.a << 1) | carry_in;
-                self.f = if c != 0 { FLAG_C } else { 0 };
-                4
-            }
-            0x1F => {
-                let c = self.a & 1;
-                let carry_in = if (self.f & FLAG_C) != 0 { 0x80 } else { 0 };
-                self.a = (self.a >> 1) | carry_in;
-                self.f = if c != 0 { FLAG_C } else { 0 };
-                4
-            }
-
-            // 8-bit arithmetic on r
-            0x80..=0x87 => {
-                let v = self.get_r(op & 7, bus);
-                self.add(v);
-                4
-            }
-            0x88..=0x8F => {
-                let v = self.get_r(op & 7, bus);
-                self.adc(v);
-                4
-            }
-            0x90..=0x97 => {
-                let v = self.get_r(op & 7, bus);
-                self.sub(v);
-                4
-            }
-            0x98..=0x9F => {
-                let v = self.get_r(op & 7, bus);
-                self.sbc(v);
-                4
-            }
-            0xA0..=0xA7 => {
-                let v = self.get_r(op & 7, bus);
-                self.and(v);
-                4
-            }
-            0xA8..=0xAF => {
-                let v = self.get_r(op & 7, bus);
-                self.xor(v);
-                4
-            }
-            0xB0..=0xB7 => {
-                let v = self.get_r(op & 7, bus);
-                self.or(v);
-                4
-            }
-            0xB8..=0xBF => {
-                let v = self.get_r(op & 7, bus);
-                self.cp(v);
-                4
-            }
-
-            // 8-bit arithmetic on n8
-            0xC6 => {
-                let v = self.next_byte(bus);
-                self.add(v);
-                8
-            }
-            0xCE => {
-                let v = self.next_byte(bus);
-                self.adc(v);
-                8
-            }
-            0xD6 => {
-                let v = self.next_byte(bus);
-                self.sub(v);
-                8
-            }
-            0xDE => {
-                let v = self.next_byte(bus);
-                self.sbc(v);
-                8
-            }
-            0xE6 => {
-                let v = self.next_byte(bus);
-                self.and(v);
-                8
-            }
-            0xEE => {
-                let v = self.next_byte(bus);
-                self.xor(v);
-                8
-            }
-            0xF6 => {
-                let v = self.next_byte(bus);
-                self.or(v);
-                8
-            }
-            0xFE => {
-                let v = self.next_byte(bus);
-                self.cp(v);
-                8
-            }
-            _ => self.execute_misc(op, bus),
+            _ => self.execute_block_3(op, bus),
         }
+    }
+
+    fn execute_block_0(&mut self, y: u8, z: u8, bus: &mut Motherboard) {
+        let operand = R8::from_bits(y);
+        match z {
+            0 => self.execute_relative(y, bus),
+            1 => self.execute_pair_load_add(y, bus),
+            2 => self.execute_indirect(y, bus),
+            3 => {
+                let pair = R16::from_bits(y >> 1, R16::Sp);
+                let delta = if y & 1 == 0 { 1 } else { -1 };
+                let val = self.regs.pair(pair).wrapping_add_signed(delta);
+                self.regs.set_pair(pair, val);
+                self.idle(bus);
+            }
+            4 => {
+                let val = self.load(operand, bus);
+                let result = self.regs.increment(val);
+                self.store(operand, result, bus);
+            }
+            5 => {
+                let val = self.load(operand, bus);
+                let result = self.regs.decrement(val);
+                self.store(operand, result, bus);
+            }
+            6 => {
+                let val = self.fetch(bus);
+                self.store(operand, val, bus);
+            }
+            _ => self.regs.accumulator_op(y),
+        }
+    }
+
+    fn execute_relative(&mut self, y: u8, bus: &mut Motherboard) {
+        match y {
+            0 => {}
+            1 => {
+                let addr = self.fetch_word(bus);
+                let [high, low] = self.regs.sp.to_be_bytes();
+                self.write(addr, low, bus);
+                self.write(addr.wrapping_add(1), high, bus);
+            }
+            2 => self.stop(bus),
+            _ => {
+                let offset = sign_extend(self.fetch(bus));
+                if y == 3 || self.regs.condition(y) {
+                    self.regs.pc = self.regs.pc.wrapping_add_signed(offset);
+                    self.idle(bus);
+                }
+            }
+        }
+    }
+
+    fn execute_pair_load_add(&mut self, y: u8, bus: &mut Motherboard) {
+        let pair = R16::from_bits(y >> 1, R16::Sp);
+        if y & 1 == 0 {
+            let val = self.fetch_word(bus);
+            self.regs.set_pair(pair, val);
+        } else {
+            self.regs.add_hl(self.regs.pair(pair));
+            self.idle(bus);
+        }
+    }
+
+    fn execute_indirect(&mut self, y: u8, bus: &mut Motherboard) {
+        let (pair, step) = match y >> 1 {
+            0 => (R16::Bc, 0),
+            1 => (R16::De, 0),
+            2 => (R16::Hl, 1),
+            _ => (R16::Hl, -1),
+        };
+        let addr = self.regs.pair(pair);
+        if y & 1 == 0 {
+            self.write(addr, self.regs.a, bus);
+        } else {
+            self.regs.a = self.read(addr, bus);
+        }
+        self.regs.set_pair(pair, addr.wrapping_add_signed(step));
+    }
+
+    fn execute_block_3(&mut self, op: u8, bus: &mut Motherboard) {
+        let y = (op >> 3) & 7;
+        match op & 7 {
+            0 => self.execute_ret_cond_or_high(y, bus),
+            1 => self.execute_pop_or_ret(y, bus),
+            2 => self.execute_jump_cond_or_absolute(y, bus),
+            3 => self.execute_control(y, bus),
+            4 => {
+                if y <= 3 {
+                    self.call_if(self.regs.condition(y), bus);
+                }
+            }
+            5 => self.execute_push_or_call(y, bus),
+            6 => {
+                let val = self.fetch(bus);
+                self.regs.alu(y, val);
+            }
+            _ => {
+                self.idle(bus);
+                self.push(self.regs.pc, bus);
+                self.regs.pc = u16::from(op & RST_MASK);
+            }
+        }
+    }
+
+    fn execute_ret_cond_or_high(&mut self, y: u8, bus: &mut Motherboard) {
+        match y {
+            4 => {
+                let low = self.fetch(bus);
+                self.write(u16::from_be_bytes([HIGH_PAGE, low]), self.regs.a, bus);
+            }
+            5 => {
+                let offset = self.fetch(bus);
+                self.regs.sp = self.regs.sp_plus(offset);
+                self.idle(bus);
+                self.idle(bus);
+            }
+            6 => {
+                let low = self.fetch(bus);
+                self.regs.a = self.read(u16::from_be_bytes([HIGH_PAGE, low]), bus);
+            }
+            7 => {
+                let offset = self.fetch(bus);
+                let result = self.regs.sp_plus(offset);
+                self.regs.set_pair(R16::Hl, result);
+                self.idle(bus);
+            }
+            _ => {
+                self.idle(bus);
+                if self.regs.condition(y) {
+                    self.ret(bus);
+                }
+            }
+        }
+    }
+
+    fn execute_pop_or_ret(&mut self, y: u8, bus: &mut Motherboard) {
+        match y {
+            1 => self.ret(bus),
+            3 => {
+                self.ret(bus);
+                self.ime = true;
+            }
+            5 => self.regs.pc = self.regs.pair(R16::Hl),
+            7 => {
+                self.regs.sp = self.regs.pair(R16::Hl);
+                self.idle(bus);
+            }
+            _ => {
+                let val = self.pop(bus);
+                self.regs.set_pair(R16::from_bits(y >> 1, R16::Af), val);
+            }
+        }
+    }
+
+    fn execute_jump_cond_or_absolute(&mut self, y: u8, bus: &mut Motherboard) {
+        match y {
+            4 => self.write(self.c_page_addr(), self.regs.a, bus),
+            5 => {
+                let addr = self.fetch_word(bus);
+                self.write(addr, self.regs.a, bus);
+            }
+            6 => self.regs.a = self.read(self.c_page_addr(), bus),
+            7 => {
+                let addr = self.fetch_word(bus);
+                self.regs.a = self.read(addr, bus);
+            }
+            _ => self.jump_if(self.regs.condition(y), bus),
+        }
+    }
+
+    fn execute_control(&mut self, y: u8, bus: &mut Motherboard) {
+        match y {
+            0 => self.jump_if(true, bus),
+            1 => {
+                let op = self.fetch(bus);
+                self.execute_cb(op, bus);
+            }
+            6 => {
+                self.ime = false;
+                self.ei_pending = false;
+            }
+            7 => self.ei_pending = true,
+            // Undefined opcodes behave as NOP.
+            _ => {}
+        }
+    }
+
+    fn execute_push_or_call(&mut self, y: u8, bus: &mut Motherboard) {
+        if y & 1 == 0 {
+            self.idle(bus);
+            self.push(self.regs.pair(R16::from_bits(y >> 1, R16::Af)), bus);
+        } else if y == 1 {
+            self.call_if(true, bus);
+        }
+    }
+
+    fn execute_cb(&mut self, op: u8, bus: &mut Motherboard) {
+        let operand = R8::from_bits(op);
+        let bit = (op >> 3) & 7;
+        let val = self.load(operand, bus);
+        let result = match op >> 6 {
+            0 => self.regs.shift(bit, val),
+            1 => return self.regs.test_bit(bit, val),
+            2 => val & !(1 << bit),
+            _ => val | (1 << bit),
+        };
+        self.store(operand, result, bus);
+    }
+
+    fn c_page_addr(&self) -> u16 {
+        u16::from_be_bytes([HIGH_PAGE, self.regs.c])
+    }
+
+    fn jump_if(&mut self, taken: bool, bus: &mut Motherboard) {
+        let target = self.fetch_word(bus);
+        if taken {
+            self.regs.pc = target;
+            self.idle(bus);
+        }
+    }
+
+    fn call_if(&mut self, taken: bool, bus: &mut Motherboard) {
+        let target = self.fetch_word(bus);
+        if taken {
+            self.idle(bus);
+            self.push(self.regs.pc, bus);
+            self.regs.pc = target;
+        }
+    }
+
+    fn ret(&mut self, bus: &mut Motherboard) {
+        self.regs.pc = self.pop(bus);
+        self.idle(bus);
     }
 }
