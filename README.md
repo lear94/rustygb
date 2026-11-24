@@ -29,9 +29,11 @@ This project is a **clean-room implementation** created solely for **educational
 * **OAM DMA**, HALT bug and STOP.
 
 ### Accuracy
-Passes blargg `cpu_instrs`, `instr_timing`, `mem_timing` and `halt_bug`, and `dmg-acid2`.
-Known limits: mid-line register changes, variable mode 3 length, VRAM/OAM blocking
-by the PPU, T-cycle wave RAM access, the DMG OAM bug and DMA bus conflicts are not modelled.
+Passes every DMG ROM of the mooneye `acceptance` and `emulator-only` sets, blargg
+`cpu_instrs`, `instr_timing`, `mem_timing`, `halt_bug` and `dmg_sound`, `rtc3test`, and
+`dmg-acid2` (run by hand; the ROMs are not in this repository).
+Not modelled: mid-line register changes, the DMG OAM bug, DMA bus conflicts, the window's
+share of mode 3 length, the link cable and Game Boy Color features.
 
 ### Cartridge Support
 * **ROM Only:** 32KB games, with or without RAM.
@@ -98,6 +100,7 @@ src/
 ├── ppu/          Pixel Processing Unit
 ├── apu/          Audio Processing Unit
 ├── cartridge/    ROM-only / MBC1 / MBC3 / MBC5 mappers
+├── hardware.rs   Constants shared by every component
 ├── save.rs       Crash-safe save files
 ├── serial.rs     Serial port (no link partner)
 ├── joypad.rs     Backend-agnostic joypad
