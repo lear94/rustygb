@@ -3,8 +3,10 @@
 use std::error::Error;
 use std::fmt;
 use std::fs::{self, File};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const SAVE_EXTENSION: &str = "sav";
 const TEMP_PREFIX: &str = ".rustygb-";
@@ -70,9 +72,8 @@ impl SaveFile {
         match fs::canonicalize(&path) {
             Ok(path) => Ok(Self { path }),
             // A link to an unmounted place is a save that exists, not a missing one.
-            Err(source) if fs::symlink_metadata(&path).is_ok() => {
-                Err(SaveError::Io { path, source })
-            }
+            Err(source) if path.is_symlink() => Err(SaveError::Io { path, source }),
+            // Missing, or on a volume that resolves no paths.
             Err(_) => Ok(Self { path }),
         }
     }
@@ -119,11 +120,19 @@ impl SaveFile {
         stored
     }
 
-    /// Distinct per process, so concurrent instances never share a file, and short, so any
-    /// name the save can have leaves room for it.
+    /// Distinct per store: processes in different containers can share an id, and one
+    /// process can keep several saves. Short, so any name the save can have leaves room.
     fn temp_path(&self) -> PathBuf {
-        let name = format!("{TEMP_PREFIX}{}{TEMP_SUFFIX}", std::process::id());
-        self.path.with_file_name(name)
+        static STORES: AtomicU64 = AtomicU64::new(0);
+        // Relaxed: only uniqueness matters, nothing is published.
+        let store = STORES.fetch_add(1, Ordering::Relaxed);
+        let mut hasher = DefaultHasher::new();
+        self.path.hash(&mut hasher);
+        self.path.with_file_name(format!(
+            "{TEMP_PREFIX}{:x}-{}-{store}{TEMP_SUFFIX}",
+            hasher.finish(),
+            std::process::id(),
+        ))
     }
 
     fn io_error(&self, source: io::Error) -> SaveError {
@@ -144,7 +153,8 @@ fn write_synced(path: &Path, image: &[u8], permissions: Option<fs::Permissions>)
     let mut file = File::create_new(path)?;
     file.write_all(image)?;
     if let Some(permissions) = permissions {
-        file.set_permissions(permissions)?;
+        // Best effort: some mounts have no permissions to set.
+        let _ = file.set_permissions(permissions);
     }
     // Without the sync, the rename may reach disk before the data does.
     file.sync_all()

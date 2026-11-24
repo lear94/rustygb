@@ -47,13 +47,41 @@ fn store_replaces_and_leaves_no_temp() {
 }
 
 #[test]
-fn store_failure_keeps_previous_save() {
+fn store_failure_leaves_no_temp() {
     let dir = Sandbox::new("failure");
-    dir.save().store(&[7]).expect("writable dir");
-    fs::create_dir(dir.0.join(format!(".rustygb-{}.tmp", std::process::id())))
-        .expect("blocks the temp file");
+    fs::create_dir(dir.0.join("game.sav")).expect("blocks the rename");
     assert!(matches!(dir.save().store(&[8]), Err(SaveError::Io { .. })));
-    assert_eq!(dir.save().load().expect("readable"), Some(vec![7]));
+    assert_eq!(fs::read_dir(&dir.0).expect("readable").count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn store_unwritable_dir_keeps_previous_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new("unwritable");
+    dir.save().store(&[7]).expect("writable dir");
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o500)).expect("owned");
+    let stored = dir.save().store(&[8]);
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).expect("owned");
+    // Root ignores the mode, and then the store simply succeeds.
+    let expected = if stored.is_ok() { 8 } else { 7 };
+    assert_eq!(dir.save().load().expect("readable"), Some(vec![expected]));
+}
+
+#[test]
+fn store_concurrent_saves_do_not_mix() {
+    let dir = Sandbox::new("concurrent");
+    std::thread::scope(|scope| {
+        for id in 0..4u8 {
+            let save = SaveFile::for_rom(&dir.0.join(format!("{id}.gb"))).expect("not a save");
+            scope.spawn(move || {
+                for _ in 0..50 {
+                    save.store(&[id; 4096]).expect("writable dir");
+                    assert_eq!(save.load().expect("readable"), Some(vec![id; 4096]));
+                }
+            });
+        }
+    });
 }
 
 #[test]
