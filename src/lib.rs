@@ -33,6 +33,7 @@ pub mod joypad;
 pub mod ppu;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod save;
+pub mod serial;
 pub mod timer;
 
 #[cfg(target_arch = "wasm32")]
@@ -94,7 +95,7 @@ impl GameBoy {
 
     /// Borrow the current 160×144 RGBA frame buffer.
     pub fn frame(&self) -> &[u8] {
-        &self.bus.ppu.buffer
+        self.bus.ppu.frame()
     }
 
     /// Drain up to `out.len()` mixed audio samples into `out` and return

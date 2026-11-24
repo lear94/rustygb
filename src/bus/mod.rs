@@ -8,13 +8,12 @@ use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
+use crate::serial::Serial;
 use crate::timer::Timer;
 use dma::OamDma;
 
 /// T-cycles per M-cycle, the granularity of bus accesses.
 pub const T_CYCLES_PER_M_CYCLE: u32 = 4;
-/// Same span for the peripherals counting in bytes.
-const TICK_T_CYCLES: u8 = 4;
 const WRAM_LEN: usize = 8 * 1024;
 const WRAM_MASK: u16 = 0x1FFF;
 const HRAM_LEN: usize = 127;
@@ -32,9 +31,6 @@ const IF_UNUSED: u8 = 0xE0;
 /// The DMG boot ROM leaves a V-Blank request pending.
 const POST_BOOT_IF: u8 = 0xE1;
 
-const SERIAL_START: u8 = 0x80;
-const SERIAL_UNUSED: u8 = 0x7E;
-
 /// Emulated machine without its CPU.
 pub struct Motherboard {
     cartridge: Cartridge,
@@ -46,13 +42,12 @@ pub struct Motherboard {
     pub timer: Timer,
     /// Buttons.
     pub joypad: Joypad,
+    serial: Serial,
     dma: OamDma,
     wram: [u8; WRAM_LEN],
     hram: [u8; HRAM_LEN],
     ie: u8,
     if_reg: u8,
-    serial_sb: u8,
-    serial_sc: u8,
 }
 
 impl Motherboard {
@@ -65,13 +60,12 @@ impl Motherboard {
             apu: Apu::new(sample_rate_hz),
             timer: Timer::new(),
             joypad: Joypad::new(),
+            serial: Serial::new(),
             dma: OamDma::new(),
             wram: [0; WRAM_LEN],
             hram: [0; HRAM_LEN],
             ie: 0,
             if_reg: POST_BOOT_IF,
-            serial_sb: 0,
-            serial_sc: 0,
         }
     }
 
@@ -84,12 +78,10 @@ impl Motherboard {
             let byte = self.read_unblocked(copy.source);
             self.ppu.write_oam(usize::from(copy.oam_idx), byte);
         }
-        self.ppu.tick(TICK_T_CYCLES, &mut self.if_reg);
+        self.if_reg |= self.ppu.tick();
         self.apu.tick();
 
-        // No link partner: transfers complete at once.
-        if self.serial_sc & SERIAL_START != 0 {
-            self.serial_sc &= !SERIAL_START;
+        if self.serial.tick() {
             self.if_reg |= IRQ_SERIAL;
         }
         if std::mem::take(&mut self.joypad.interrupt) {
@@ -158,8 +150,8 @@ impl Motherboard {
     fn read_high(&self, addr: u16) -> u8 {
         match addr {
             0xFF00 => self.joypad.read(),
-            0xFF01 => self.serial_sb,
-            0xFF02 => self.serial_sc | SERIAL_UNUSED,
+            0xFF01 => self.serial.data(),
+            0xFF02 => self.serial.control(),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.if_reg | IF_UNUSED,
             0xFF10..=0xFF3F => self.apu.read(addr),
@@ -173,8 +165,8 @@ impl Motherboard {
     fn write_high(&mut self, addr: u16, val: u8) {
         match addr {
             0xFF00 => self.joypad.write(val),
-            0xFF01 => self.serial_sb = val,
-            0xFF02 => self.serial_sc = val,
+            0xFF01 => self.serial.write_data(val),
+            0xFF02 => self.serial.write_control(val),
             0xFF04..=0xFF07 => self.timer.write(addr, val),
             0xFF0F => self.if_reg = val | IF_UNUSED,
             0xFF10..=0xFF3F => self.apu.write(addr, val),

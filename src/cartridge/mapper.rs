@@ -8,6 +8,9 @@ const MBC1_HIGH_SHIFT: u32 = 5;
 const MBC3_ROM_MASK: u8 = 0x7F;
 const MBC3_LAST_RAM_BANK: u8 = 0x03;
 const MBC5_RAM_MASK: u8 = 0x0F;
+/// On rumble cartridges bit 3 drives the motor instead of selecting RAM.
+const MBC5_RUMBLE_RAM_MASK: u8 = 0x07;
+const FIRST_RUMBLE_CODE: u8 = 0x1C;
 /// First address of the switchable ROM window.
 const SWITCHABLE_ROM: u16 = 0x4000;
 
@@ -29,6 +32,7 @@ pub(super) enum Mapper {
         rom_low: u8,
         rom_high: u8,
         ram_bank: u8,
+        ram_mask: u8,
     },
 }
 
@@ -52,6 +56,11 @@ impl Mapper {
                 rom_low: 1,
                 rom_high: 0,
                 ram_bank: 0,
+                ram_mask: if code >= FIRST_RUMBLE_CODE {
+                    MBC5_RUMBLE_RAM_MASK
+                } else {
+                    MBC5_RAM_MASK
+                },
             }),
             _ => None,
         }
@@ -149,11 +158,12 @@ impl Mapper {
                 rom_low,
                 rom_high,
                 ram_bank,
+                ram_mask,
             } => match addr {
                 0x0000..=0x1FFF => *ram_enabled = enables_ram(val),
                 0x2000..=0x2FFF => *rom_low = val,
                 0x3000..=0x3FFF => *rom_high = val & 1,
-                0x4000..=0x5FFF => *ram_bank = val & MBC5_RAM_MASK,
+                0x4000..=0x5FFF => *ram_bank = val & *ram_mask,
                 _ => {}
             },
         }
@@ -171,6 +181,7 @@ mod tests {
     const MBC1: u8 = 0x03;
     const MBC3: u8 = 0x13;
     const MBC5: u8 = 0x1B;
+    const MBC5_RUMBLE: u8 = 0x1E;
 
     fn mapper(code: u8, writes: &[(u16, u8)]) -> Mapper {
         let mut mapper = Mapper::from_code(code).expect("supported mapper");
@@ -224,6 +235,8 @@ mod tests {
             (MBC3, &[(0, 0x0A), (0x4000, 3), (0x4000, 7)], Some(3)),
             (MBC3, &[(0, 0x0A), (0x4000, 8)], None),
             (MBC5, &[(0, 0x0A), (0x4000, 2)], Some(2)),
+            (MBC5, &[(0, 0x0A), (0x4000, 0x0F)], Some(15)),
+            (MBC5_RUMBLE, &[(0, 0x0A), (0x4000, 0x0B)], Some(3)),
             (MBC5, &[(0, 0x0A), (0, 0)], None),
         ] {
             assert_eq!(mapper(code, writes).ram_bank(), expected, "{code:#x}");
