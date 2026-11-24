@@ -82,7 +82,7 @@ fn drain_samples_queue_is_bounded() {
         apu.samples.capacity(),
         VecDeque::<f32>::with_capacity(MAX_BUFFERED_SAMPLES).capacity()
     );
-    let mut out = [0.0; MAX_BUFFERED_SAMPLES + 1];
+    let mut out = vec![0.0; MAX_BUFFERED_SAMPLES + 1];
     assert_eq!(apu.drain_samples(&mut out), MAX_BUFFERED_SAMPLES);
     assert_eq!(apu.drain_samples(&mut out), 0);
 }

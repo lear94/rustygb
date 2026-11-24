@@ -5,7 +5,7 @@ const MAX_VOLUME: u8 = 15;
 const ZERO_PERIOD: u8 = 8;
 const PERIOD_MASK: u8 = 0x07;
 const RISING: u8 = 0x08;
-/// A DAC is powered while any of these NRx2 bits is set.
+/// A DAC is powered while any of these `NRx2` bits is set.
 const DAC_MASK: u8 = 0xF8;
 
 #[derive(Debug, Default)]

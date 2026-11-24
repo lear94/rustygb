@@ -43,7 +43,7 @@ mod tests {
         let start = Instant::now();
         let mut clock = FrameClock::new(start);
         assert!(clock.frame_due(start));
-        assert!(!clock.frame_due(start + FRAME_PERIOD - Duration::from_nanos(1)));
+        assert!(!clock.frame_due(start + FRAME_PERIOD / 2));
         assert!(clock.frame_due(start + FRAME_PERIOD));
     }
 

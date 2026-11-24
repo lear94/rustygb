@@ -17,6 +17,17 @@ use registers::{R16, R8};
 const INTERRUPT_VECTOR_BASE: u16 = 0x40;
 const INTERRUPT_VECTOR_STRIDE: u16 = 8;
 
+/// What the CPU does between instructions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Activity {
+    #[default]
+    Running,
+    /// Waiting for an interrupt request.
+    Halted,
+    /// Waiting for a button, with the system clock off.
+    Stopped,
+}
+
 /// SM83 CPU state.
 #[derive(Debug, Default)]
 pub struct Cpu {
@@ -24,8 +35,7 @@ pub struct Cpu {
     pub regs: Registers,
     /// Interrupt master enable.
     pub ime: bool,
-    halted: bool,
-    stopped: bool,
+    activity: Activity,
     /// EI takes effect after the following instruction.
     ei_pending: bool,
     /// The next fetch does not advance PC.
@@ -55,19 +65,14 @@ impl Cpu {
     }
 
     fn advance(&mut self, bus: &mut Motherboard) {
-        if self.stopped {
-            if !bus.joypad.any_selected_pressed() {
-                // The clock is off: time passes for the host only.
+        match self.activity {
+            Activity::Stopped if !bus.joypad.any_selected_pressed() => {
+                // Time passes for the host only.
                 self.m_cycles += 1;
                 return;
             }
-            self.stopped = false;
-        }
-        if self.halted {
-            if bus.pending_interrupts() == 0 {
-                return self.idle(bus);
-            }
-            self.halted = false;
+            Activity::Halted if bus.pending_interrupts() == 0 => return self.idle(bus),
+            _ => self.activity = Activity::Running,
         }
         // Hardware samples interrupts during the opcode fetch, then discards the opcode.
         let op = self.read(self.regs.pc, bus);
@@ -99,14 +104,14 @@ impl Cpu {
         if !self.ime && bus.pending_interrupts() != 0 {
             self.halt_bug = true;
         } else {
-            self.halted = true;
+            self.activity = Activity::Halted;
         }
     }
 
     fn stop(&mut self, bus: &mut Motherboard) {
         self.regs.pc = self.regs.pc.wrapping_add(1);
         bus.timer.reset_divider();
-        self.stopped = true;
+        self.activity = Activity::Stopped;
     }
 
     fn idle(&mut self, bus: &mut Motherboard) {

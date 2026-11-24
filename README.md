@@ -1,6 +1,6 @@
 # RustyGB 🦀
 
-**RustyGB** is a high-performance, cycle-accurate Game Boy (DMG) emulator written entirely in **Rust** from scratch.
+**RustyGB** is a Game Boy (DMG) emulator written entirely in **Rust** from scratch.
 
 This project is a **clean-room implementation** created solely for **educational purposes** to study hardware architecture and emulation development.
 
@@ -20,23 +20,25 @@ This project is a **clean-room implementation** created solely for **educational
 ## Features 🚀
 
 ### Core Emulation
-* **CPU (SM83):** Full implementation of the instruction set, built from scratch with cycle-accurate timing.
+* **CPU (SM83):** Full instruction set; every memory access advances the machine by one M-cycle.
 * **PPU (Graphics):**
-    * Pixel-perfect rendering (160x144).
-    * Supports Background map, Window overlay, and Sprites (8x8 & 8x16).
-    * Precise VBlank/HBlank timing and LCD status interrupts.
-* **APU (Audio):**
-    * 4-Channel Audio: Square 1 (Sweep), Square 2, Wave, and Noise.
-    * Full volume envelope and frequency sweep implementation.
-    * Audio sync algorithm to prevent crackling on modern hardware.
-* **Timer:** Accurate DIV, TIMA, TMA implementation including "falling edge" behavior (critical for *Tetris* RNG).
+    * Scanline renderer (160x144) with background, window and sprites (8x8 & 8x16), including the 10-sprite limit and DMG priority.
+    * VBlank and STAT interrupts.
+* **APU (Audio):** Square 1 (sweep), Square 2, Wave and Noise with envelopes and length counters, mixed to mono.
+* **Timer:** DIV, TIMA, TMA with "falling edge" behavior and delayed reload.
+* **OAM DMA**, HALT bug and STOP.
+
+### Accuracy
+Passes blargg `cpu_instrs`, `instr_timing`, `mem_timing` and `halt_bug`, and `dmg-acid2`.
+Known limits: mid-line register changes, variable mode 3 length, VRAM/OAM blocking
+by the PPU, T-cycle wave RAM access, the DMG OAM bug and DMA bus conflicts are not modelled.
 
 ### Cartridge Support
 * **ROM Only:** 32KB games.
 * **MBC1:** Bank switching logic.
-* **MBC3:** Advanced banking.
+* **MBC3:** Bank switching (no real-time clock).
 * **MBC5:** Modern Game Boy games support.
-* **SRAM:** Battery-backed saves (`.sav` files are compatible with other major emulators).
+* **SRAM:** Battery-backed saves as raw `.sav` dumps, written atomically on exit, on ROM change and every ~10 s. An RTC footer from another emulator is preserved; a save of any other size is refused, never overwritten.
 
 ---
 
@@ -86,13 +88,16 @@ See [`web/README.md`](web/README.md) for the full WebAssembly workflow.
 ```
 src/
 ├── lib.rs        High-level GameBoy wrapper + module re-exports
-├── main.rs       Native (winit + pixels + cpal) front-end
+├── main.rs       Desktop entry point
+├── native/       Desktop front-end (window, audio, pacing, saves)
 ├── wasm.rs       wasm-bindgen JS bindings (compiled only on wasm32)
-├── cpu.rs        Sharp SM83 CPU
-├── bus.rs        System bus / motherboard
-├── ppu.rs        Pixel Processing Unit
-├── apu.rs        Audio Processing Unit
-├── cartridge.rs  ROM-only / MBC1 / MBC3 / MBC5 mappers
+├── cpu/          Sharp SM83 CPU
+├── bus/          System bus and OAM DMA
+├── ppu/          Pixel Processing Unit
+├── apu/          Audio Processing Unit
+├── cartridge/    ROM-only / MBC1 / MBC3 / MBC5 mappers
+├── save.rs       Crash-safe save files
+├── serial.rs     Serial port (no link partner)
 ├── joypad.rs     Backend-agnostic joypad
 └── timer.rs      DIV/TIMA/TMA/TAC
 web/              Browser front-end for the WebAssembly build

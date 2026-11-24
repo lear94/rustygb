@@ -1,5 +1,9 @@
 //! Save files on a real file system: atomic replacement has no in-memory equivalent.
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(
+    clippy::expect_used,
+    reason = "test fixtures: clippy only exempts #[test] functions"
+)]
 
 use rusty_gb::save::{SaveError, SaveFile};
 use std::fs;

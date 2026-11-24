@@ -57,7 +57,7 @@ const POST_BOOT_WRITES: [(u16, u8); 5] = [
     (NR51, 0xF3),
 ];
 
-/// Decoded NRx4 write.
+/// Decoded `NRx4` write.
 #[derive(Clone, Copy, Debug)]
 struct Control {
     frequency_high: u8,

@@ -2,7 +2,8 @@
 name = "rusty_gb"
 version = "1.0.0"
 edition = "2021"
-description = "Cycle-accurate Game Boy (DMG) emulator written from scratch in Rust"
+rust-version = "1.98"
+description = "Game Boy (DMG) emulator written from scratch in Rust"
 license = "MIT"
 repository = "https://github.com/lear94/rustygb"
 
@@ -19,21 +20,23 @@ bench = false
 
 # Native (desktop) front-end dependencies.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# GPU-scaled pixel buffer.
 pixels = "0.13.0"
+# Window and event loop; the version `pixels` 0.13 shares raw-window-handle with.
 winit = "0.28.7"
+# Keyboard state tracking on top of winit events.
 winit_input_helper = "0.14.0"
+# Cross-platform audio output.
 cpal = "0.15.2"
+# Lock-free bounded channel: the audio callback must not block.
 crossbeam-channel = "0.5.8"
 
 # WebAssembly front-end dependencies.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# JavaScript bindings.
 wasm-bindgen = "0.2"
-js-sys = "0.3"
+# Readable panics in the browser console.
 console_error_panic_hook = "0.1"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
-version = "0.3"
-features = ["console"]
 
 [dev-dependencies]
 # Statistical benchmarks with stored baselines; `std` has no stable harness.
@@ -43,7 +46,25 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 name = "run_frame"
 harness = false
 
+[lints.rust]
+warnings = "deny"
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+float_cmp = "deny"
+
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+# No `panic = "abort"`: with a cdylib, Cargo gives the abort and unwind builds of this
+# library the same file name, so the bench target cannot link.

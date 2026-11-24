@@ -1657,10 +1657,8 @@ dependencies = [
  "cpal",
  "criterion",
  "crossbeam-channel",
- "js-sys",
  "pixels",
  "wasm-bindgen",
- "web-sys",
  "winit",
  "winit_input_helper",
 ]

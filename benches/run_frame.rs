@@ -1,5 +1,12 @@
 //! Steady-state cost of emulating one frame of a synthetic ROM.
 
+#![allow(
+    missing_docs,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "harness code: the macro generates undocumented items and a bad ROM must abort"
+)]
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rusty_gb::GameBoy;
 

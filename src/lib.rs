@@ -1,7 +1,6 @@
-//! # RustyGB
+//! Portable Game Boy (DMG) emulator core.
 //!
-//! A portable, dependency-light Game Boy (DMG) emulator core written in
-//! Rust. The same crate is used by:
+//! The same crate is used by:
 //!
 //! * the native binary defined in `src/main.rs` (winit + pixels + cpal)
 //! * the WebAssembly front-end built with `wasm-pack` (see `wasm.rs`)
@@ -13,12 +12,15 @@
 //! ```no_run
 //! use rusty_gb::{Button, GameBoy};
 //!
-//! let rom = std::fs::read("game.gb").unwrap();
-//! let mut gb = GameBoy::from_rom(rom, /* sample_rate */ 48_000).unwrap();
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let rom = std::fs::read("game.gb")?;
+//! let mut gb = GameBoy::from_rom(rom, /* sample_rate */ 48_000)?;
 //!
 //! gb.set_button(Button::Start, true);
 //! gb.run_frame();           // run 70_224 T-cycles ≈ 1 frame
 //! let pixels = gb.frame();  // 160×144 RGBA
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! The core is intentionally pull-based: the host calls [`GameBoy::run_frame`]
@@ -94,6 +96,7 @@ impl GameBoy {
     }
 
     /// Borrow the current 160×144 RGBA frame buffer.
+    #[must_use]
     pub fn frame(&self) -> &[u8] {
         self.bus.ppu.frame()
     }
@@ -105,6 +108,7 @@ impl GameBoy {
     }
 
     /// Number of audio samples currently buffered by the APU.
+    #[must_use]
     pub fn buffered_audio(&self) -> usize {
         self.bus.apu.buffered_samples()
     }

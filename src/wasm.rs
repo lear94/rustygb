@@ -8,11 +8,16 @@
 //! import init, { WasmGameBoy, WasmButton } from "./pkg/rusty_gb.js";
 //!
 //! await init();
-//! const gb = WasmGameBoy.new(romBytes, 48000);
+//! const gb = new WasmGameBoy(romBytes, 48000);
 //! gb.set_button(WasmButton.Start, true);
 //! gb.run_frame();
 //! ctx.putImageData(new ImageData(new Uint8ClampedArray(gb.frame()), 160, 144), 0, 0);
 //! ```
+
+#![allow(
+    clippy::float_cmp,
+    reason = "wasm-bindgen converts enum discriminants through f64"
+)]
 
 use wasm_bindgen::prelude::*;
 
@@ -24,13 +29,21 @@ use crate::{Button, GameBoy};
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
 pub enum WasmButton {
+    /// D-pad right.
     Right,
+    /// D-pad left.
     Left,
+    /// D-pad up.
     Up,
+    /// D-pad down.
     Down,
+    /// A button.
     A,
+    /// B button.
     B,
+    /// Select button.
     Select,
+    /// Start button.
     Start,
 }
 
@@ -66,6 +79,9 @@ pub struct WasmGameBoy {
 #[wasm_bindgen]
 impl WasmGameBoy {
     /// Build a new emulator from a ROM byte array and an audio sample rate.
+    ///
+    /// # Errors
+    /// The message of the [`crate::CartridgeError`] rejecting the ROM.
     #[wasm_bindgen(constructor)]
     pub fn new(rom: Vec<u8>, sample_rate: u32) -> Result<WasmGameBoy, JsValue> {
         GameBoy::from_rom(rom, sample_rate)
@@ -79,6 +95,7 @@ impl WasmGameBoy {
     }
 
     /// Get the current 160×144 RGBA8 frame as a freshly-allocated `Uint8Array`.
+    #[must_use]
     pub fn frame(&self) -> Vec<u8> {
         self.inner.frame().to_vec()
     }
@@ -86,13 +103,13 @@ impl WasmGameBoy {
     /// Drain up to `max` queued audio samples and return them. An empty
     /// vector is returned when no samples are available.
     pub fn drain_audio(&mut self, max: usize) -> Vec<f32> {
-        let mut buf = vec![0.0; max];
-        let n = self.inner.drain_audio(&mut buf);
-        buf.truncate(n);
+        let mut buf = vec![0.0; max.min(self.inner.buffered_audio())];
+        self.inner.drain_audio(&mut buf);
         buf
     }
 
     /// Number of audio samples currently buffered.
+    #[must_use]
     pub fn buffered_audio(&self) -> usize {
         self.inner.buffered_audio()
     }

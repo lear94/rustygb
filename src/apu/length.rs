@@ -16,12 +16,12 @@ impl Length {
         }
     }
 
-    /// Loads the counter from the value written to NRx1.
+    /// Loads the counter from the value written to `NRx1`.
     pub(super) fn load(&mut self, elapsed: u8) {
         self.remaining = self.max.saturating_sub(u16::from(elapsed));
     }
 
-    /// Applies the enable and trigger bits of NRx4.
+    /// Applies the enable and trigger bits of `NRx4`.
     ///
     /// # Arguments
     /// * `between_clocks` - the next sequencer step does not clock lengths; hardware then
