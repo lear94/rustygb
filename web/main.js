@@ -49,7 +49,7 @@ function blankScreen() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-async function ensureAudio() {
+function ensureAudio() {
     if (audioCtx) {
         return;
     }
@@ -76,7 +76,8 @@ async function ensureAudio() {
     };
     audioNode.connect(audioCtx.destination);
     if (audioCtx.state === "suspended") {
-        await audioCtx.resume();
+        // Pends until the browser allows audio; the game must not wait for it.
+        audioCtx.resume().catch((e) => setStatus(`Audio unavailable: ${e}`));
     }
 }
 
@@ -121,8 +122,8 @@ function stopLoop() {
     }
 }
 
-async function loadRom(bytes, name) {
-    await ensureAudio();
+function loadRom(bytes, name) {
+    ensureAudio();
     // Build first: a rejected ROM must leave the running game usable.
     const next = new WasmGameBoy(bytes, SAMPLE_RATE);
     gb?.free();
@@ -136,9 +137,9 @@ async function loadRom(bytes, name) {
     setStatus(`Playing: ${name}`);
 }
 
-async function tryLoadRom(bytes, name) {
+function tryLoadRom(bytes, name) {
     try {
-        await loadRom(bytes, name);
+        loadRom(bytes, name);
     } catch (e) {
         setStatus(`Failed to load ROM: ${e}`);
     }
@@ -149,7 +150,7 @@ async function tryLoadFile(file) {
         return;
     }
     try {
-        await tryLoadRom(new Uint8Array(await file.arrayBuffer()), file.name);
+        tryLoadRom(new Uint8Array(await file.arrayBuffer()), file.name);
     } catch (e) {
         setStatus(`Failed to read ROM: ${e}`);
     }
