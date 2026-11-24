@@ -68,7 +68,7 @@ async function ensureAudio() {
         const samples = gb.drain_audio(bufferSize);
         const n = samples.length;
         for (let i = 0; i < n; i++) {
-            out[i] = samples[i] * 0.1;
+            out[i] = samples[i];
         }
         for (let i = n; i < bufferSize; i++) {
             out[i] = 0;

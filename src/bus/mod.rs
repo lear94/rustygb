@@ -85,7 +85,7 @@ impl Motherboard {
             self.ppu.write_oam(usize::from(copy.oam_idx), byte);
         }
         self.ppu.tick(TICK_T_CYCLES, &mut self.if_reg);
-        self.apu.tick(TICK_T_CYCLES);
+        self.apu.tick();
 
         // No link partner: transfers complete at once.
         if self.serial_sc & SERIAL_START != 0 {
