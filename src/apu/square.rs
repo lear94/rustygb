@@ -22,7 +22,8 @@ pub(super) struct Square {
     pub(super) sweep: Sweep,
     frequency: u16,
     timer: u16,
-    duty: u8,
+    /// Pattern of the selected duty.
+    waveform: u8,
     duty_step: u8,
 }
 
@@ -35,7 +36,7 @@ impl Square {
             sweep: Sweep::default(),
             frequency: 0,
             timer: period(0),
-            duty: 0,
+            waveform: DUTY_PATTERNS[0],
             duty_step: 0,
         }
     }
@@ -68,7 +69,8 @@ impl Square {
     }
 
     pub(super) fn write_duty(&mut self, val: u8) {
-        self.duty = val >> DUTY_SHIFT;
+        let duty = usize::from(val >> DUTY_SHIFT);
+        self.waveform = DUTY_PATTERNS.get(duty).copied().unwrap_or(0);
     }
 
     pub(super) fn write_envelope(&mut self, val: u8) {
@@ -127,11 +129,7 @@ impl Square {
     }
 
     fn is_high(&self) -> bool {
-        let pattern = DUTY_PATTERNS
-            .get(usize::from(self.duty))
-            .copied()
-            .unwrap_or(0);
-        pattern.rotate_left(u32::from(self.duty_step)) & 0x80 != 0
+        self.waveform.rotate_left(u32::from(self.duty_step)) & 0x80 != 0
     }
 }
 

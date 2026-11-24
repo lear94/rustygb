@@ -82,7 +82,7 @@ pub struct Apu {
     /// Fractional sample position, in units of 1 / [`M_CYCLES_PER_SECOND`].
     sample_phase: u32,
     channel_gains: [i16; CHANNEL_COUNT],
-    /// Current mixed output.
+    /// Current mixed output, up to [`MIX_FULL_SCALE`]; scaled once per sample.
     level: f32,
     /// Sum and count of the levels since the last sample.
     level_sum: f32,
@@ -174,7 +174,7 @@ impl Apu {
         self.level_sum += level;
         self.level_count += 1.0;
         if self.sample_due() {
-            let sample = self.level_sum / self.level_count;
+            let sample = self.level_sum / (self.level_count * f32::from(MIX_FULL_SCALE));
             self.level_sum = 0.0;
             self.level_count = 0.0;
             self.emit(sample);
@@ -349,18 +349,12 @@ impl Apu {
     /// Mixes the channels in integers: this runs whenever an output changes, up to every
     /// M-cycle, and only the result needs to be a float.
     fn mix(&self) -> f32 {
-        let outputs = [
-            self.square_1.output(),
-            self.square_2.output(),
-            self.wave.output(),
-            self.noise.output(),
-        ];
-        let sum: i16 = outputs
-            .iter()
-            .zip(self.channel_gains)
-            .map(|(output, gain)| output * gain)
-            .sum();
-        f32::from(sum) / f32::from(MIX_FULL_SCALE)
+        let [gain_1, gain_2, gain_3, gain_4] = self.channel_gains;
+        let sum = self.square_1.output() * gain_1
+            + self.square_2.output() * gain_2
+            + self.wave.output() * gain_3
+            + self.noise.output() * gain_4;
+        f32::from(sum)
     }
 
     /// Recomputes the channel gains from the master volumes and panning.
