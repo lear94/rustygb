@@ -5,4 +5,5 @@ allow-indexing-slicing-in-tests = true
 too-many-lines-threshold = 50
 cognitive-complexity-threshold = 10
 too-many-arguments-threshold = 5
+# Section 5 allows 3 levels inside a function; clippy also counts its `impl` and body.
 excessive-nesting-threshold = 5

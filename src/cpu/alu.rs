@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn accumulator_op_flags() {
+    fn accumulator_op_each_operation_sets_flags() {
         for (operation, a, f, a_out, f_out) in [
             (2, 0x80, FLAG_Z, 0x00, FLAG_C),
             (5, 0x0F, FLAG_C, 0xF0, FLAG_N | FLAG_H | FLAG_C),

@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn clock_overflow_silences() {
+    fn clock_second_overflow_silences() {
         let mut sweep = triggered(0x11, 0x500);
         assert_eq!(
             sweep.clock(),
@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_overflow_silences() {
+    fn trigger_initial_overflow_silences() {
         let mut sweep = Sweep::default();
         sweep.write(0x11);
         assert!(sweep.trigger(0x7FF));

@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn advance_second_carries() {
+    fn advance_second_field_full_carries() {
         for (before, after) in [
             ([0, 0, 0, 0, 0], [1, 0, 0, 0, 0]),
             ([59, 0, 0, 0, 0], [0, 1, 0, 0, 0]),

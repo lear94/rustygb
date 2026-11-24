@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn tick_advances_clock() {
+    fn tick_one_second_advances_clock() {
         let mut cart = cart(MBC3_RTC);
         (0..1_048_576).for_each(|_| cart.tick());
         cart.write(0, 0x0A);

@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn condition_follows_flags() {
+    fn condition_each_encoding_follows_flags() {
         for (f, expected) in [
             (0, [true, false, true, false]),
             (FLAG_Z, [false, true, true, false]),
